@@ -36,7 +36,7 @@ export default function HistoriasScreen() {
     }
 
     try {
-      const rutaCrudaAndroid = await NativeModules.HistoriasLabNative.abrirCamaraHistorias(false);
+      const rutaCrudaAndroid = await NativeModules.HistoriasLabNative.abrirCamaraHistorias(false, false);
       const esVideo = rutaCrudaAndroid.endsWith('.mp4');
 
       setArchivoCapturado({

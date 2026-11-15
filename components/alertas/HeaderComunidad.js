@@ -7,7 +7,7 @@ export default function HeaderComunidad({ perfil, clima }) {
     <View style={styles.headerComunidadScroll}>
       <View style={styles.locInfo}>
         <Ionicons name="location-sharp" size={18} color="#111827" />
-        <Text style={styles.textoUbicacionNegro}>
+        <Text style={styles.textoUbicacionNegro} numberOfLines={2}>
           {perfil?.provincia?.toUpperCase() || 'BUENOS AIRES'}, {perfil?.localidad?.toUpperCase() || 'MERLO'}
         </Text>
       </View>
@@ -29,21 +29,23 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingBottom: 20,
-    marginBottom: 25,
+    paddingBottom: 12,
+    marginBottom: 12,
     borderBottomWidth: 1,
     borderBottomColor: '#F3F4F6'
   },
   locInfo: {
     flexDirection: 'row',
     alignItems: 'center',
-    flex: 1
+    flex: 1,
+    marginRight: 10
   },
   textoUbicacionNegro: {
     marginLeft: 8,
-    fontSize: 17,
+    fontSize: 15,
     fontWeight: '900',
-    color: '#111827'
+    color: '#111827',
+    flexShrink: 1
   },
   climaInfoBox: {
     flexDirection: 'row',

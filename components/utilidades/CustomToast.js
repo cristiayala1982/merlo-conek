@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, Animated, DeviceEventEmitter, Dimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useEffect, useRef, useState } from 'react';
+import { Animated, DeviceEventEmitter, Dimensions, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const { width } = Dimensions.get('window');
@@ -8,7 +8,7 @@ const { width } = Dimensions.get('window');
 /**
  * Función global para mostrar un Toast desde cualquier parte.
  * @param {string} message - El mensaje a mostrar.
- * @param {string} type - 'success', 'error', 'challenge', 'info'.
+ * @param {string} type - 'success', 'error', 'challenge', 'review', 'info'.
  */
 export const showToast = (message, type = 'success') => {
   DeviceEventEmitter.emit('SHOW_CUSTOM_TOAST', { message, type });
@@ -40,7 +40,7 @@ export default function CustomToast() {
 
     Animated.parallel([
       Animated.spring(translateY, {
-        toValue: insets.top + 10,
+        toValue: insets.top + 56, // Posicionarlo debajo de la Navbar (56px)
         useNativeDriver: true,
         bounciness: 8
       }),
@@ -51,7 +51,7 @@ export default function CustomToast() {
       })
     ]).start();
 
-    timeoutRef.current = setTimeout(hide, 3000);
+    timeoutRef.current = setTimeout(hide, 5000);
   };
 
   const hide = () => {
@@ -73,10 +73,11 @@ export default function CustomToast() {
 
   const getIcon = () => {
     switch (config.type) {
-      case 'success': return { name: 'checkmark-circle', color: '#10B981' };
-      case 'challenge': return { name: 'sparkles', color: '#FF6600' };
+      case 'success': return { name: 'checkmark-circle', color: '#FF6600' }; // Naranja para éxito
+      case 'challenge': return { name: 'sparkles', color: '#FDBA74' };
       case 'error': return { name: 'close-circle', color: '#EF4444' };
-      default: return { name: 'information-circle', color: '#3B82F6' };
+      case 'review': return { name: 'time-outline', color: '#FBBF24' };
+      default: return { name: 'information-circle', color: '#9CA3AF' }; // Gris para info
     }
   };
 
@@ -90,7 +91,7 @@ export default function CustomToast() {
       ]}
     >
       <View style={styles.toast}>
-        <Ionicons name={icon.name} size={22} color={icon.color} style={styles.icon} />
+        <Ionicons name={icon.name} size={18} color={icon.color} style={styles.icon} />
         <Text style={styles.message}>{config.message}</Text>
       </View>
     </Animated.View>
@@ -103,31 +104,34 @@ const styles = StyleSheet.create({
     top: 0,
     left: 0,
     right: 0,
-    zIndex: 999999, // Super por encima de todo
+    zIndex: 999999,
     alignItems: 'center',
     paddingHorizontal: 20,
   },
   toast: {
-    backgroundColor: 'rgba(17, 24, 39, 0.95)',
+    backgroundColor: 'rgba(31, 41, 55, 0.95)', // Gris Grafito oscuro con transparencia sutil
+    borderLeftWidth: 4,
+    borderLeftColor: '#FF6600', // Acento Naranja
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 18,
-    borderRadius: 100, // Estilo píldora
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 8, // Bordes menos redondeados para mayor elegancia
     width: 'auto',
     maxWidth: width - 40,
-    elevation: 10,
+    elevation: 6,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
+    shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.3,
-    shadowRadius: 6,
+    shadowRadius: 5,
   },
   icon: {
     marginRight: 10,
   },
   message: {
-    color: '#FFF',
+    color: '#F9FAFB',
     fontSize: 14,
-    fontWeight: 'bold',
+    fontWeight: '700',
+    letterSpacing: 0.3,
   }
 });

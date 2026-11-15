@@ -1,54 +1,26 @@
-import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import * as ImagePicker from 'expo-image-picker';
+import { useEffect, useState } from 'react';
+import { Alert, Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import CamaraInterna from '../camara/CamaraInterna';
 
 /**
  * Componente especializado en seleccionar SOLO FOTOS para Clasificados.
  * Diseño idéntico a Huellitas pero con los colores de Clasificados.
  */
-export default function SelectorFotoClasificados({ onFotoSeleccionada, fotosActualesCount }) {
-
+export default function SelectorFotoClasificados({ onFotoSeleccionada, fotosActualesCount, cerrarCamara }) {
+  const [camaraVisible, setCamaraVisible] = useState(false);
   const maxFotos = 4;
 
-  const handleLaunchCamera = async () => {
+  useEffect(() => {
+    if (cerrarCamara > 0) setCamaraVisible(false);
+  }, [cerrarCamara]);
+
+  const handleLaunchCamera = () => {
     if (fotosActualesCount >= maxFotos) {
       Alert.alert("Límite alcanzado", `Puedes subir un máximo de ${maxFotos} fotos.`);
       return;
     }
-
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert("Permiso denegado", "Necesitamos acceso a la cámara para tomar fotos.");
-      return;
-    }
-
-    const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      quality: 0.8,
-    });
-
-    if (!result.canceled) {
-      onFotoSeleccionada(result.assets[0].uri);
-    }
-  };
-
-  const handleLaunchGallery = async () => {
-    if (fotosActualesCount >= maxFotos) {
-      Alert.alert("Límite alcanzado", `Puedes subir un máximo de ${maxFotos} fotos.`);
-      return;
-    }
-
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      quality: 0.8,
-    });
-
-    if (!result.canceled) {
-      onFotoSeleccionada(result.assets[0].uri);
-    }
+    setCamaraVisible(true);
   };
 
   return (
@@ -56,19 +28,27 @@ export default function SelectorFotoClasificados({ onFotoSeleccionada, fotosActu
       <View style={styles.row}>
         <TouchableOpacity style={styles.btn} onPress={handleLaunchCamera}>
           <View style={[styles.iconCircle, { backgroundColor: '#F0FDF4' }]}>
-            <Ionicons name="camera" size={28} color="#059669" />
+            <Ionicons name="camera" size={36} color="#059669" />
           </View>
-          <Text style={styles.btnTxt}>Tomar Foto</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.btn} onPress={handleLaunchGallery}>
-          <View style={[styles.iconCircle, { backgroundColor: '#F0FDF4' }]}>
-            <Ionicons name="images" size={28} color="#059669" />
-          </View>
-          <Text style={styles.btnTxt}>Galería</Text>
+          <Text style={styles.btnTxt}>Foto / Galería</Text>
         </TouchableOpacity>
       </View>
       <Text style={styles.infoTxt}>Solo se permiten fotos. Máximo 4 por anuncio.</Text>
+
+      {/* MODAL OFICIAL PARA VOLAR LA CÁMARA A PANTALLA COMPLETA ENCIMA DE TODO */}
+      <Modal
+        visible={camaraVisible}
+        animationType="slide"
+        transparent={false}
+        statusBarTranslucent={true}
+        onRequestClose={() => setCamaraVisible(false)}
+      >
+        <CamaraInterna
+          visible={camaraVisible}
+          onCerrar={() => setCamaraVisible(false)}
+          onFotoCapturada={onFotoSeleccionada}
+        />
+      </Modal>
     </View>
   );
 }

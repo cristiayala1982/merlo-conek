@@ -1,512 +1,557 @@
 import { Ionicons } from '@expo/vector-icons';
+import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
-import { addDoc, arrayRemove, arrayUnion, collection, deleteDoc, doc, serverTimestamp, updateDoc } from 'firebase/firestore';
-import { useMemo, useState } from 'react';
-import { Alert, Image, Modal, Pressable, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { arrayRemove, arrayUnion, deleteDoc, doc, updateDoc } from 'firebase/firestore';
+import React, { useMemo, useState } from 'react';
+import { ActivityIndicator, Alert, DeviceEventEmitter, Pressable, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { auth, db } from '../../firebaseConfig';
+import { tiempoRelativo } from '../../services/dateUtils';
+import { crearNotificacion, enviarReporte, borrarArchivoPorUrl, borrarPostConComentarios } from '../../services/firebaseService';
 import { setVideoViewerPayload } from '../../services/videoViewerState';
+import SelectorCompartir from '../compartir/SelectorCompartir';
+import SelectorOpcionesModal from '../reportes/SelectorOpcionesModal';
+import SelectorReporteModal from '../reportes/SelectorReporteModal';
+import EditarPost from './EditarPost';
 
 const COLORS = {
   graphiteSoft: '#6B7280',
   likeBlend: '#FF6600',
 };
 
-const tiempoRelativo = (createdAt) => {
-  const fecha = createdAt?.toDate ? createdAt.toDate() : null;
-  if (!fecha) return 'Publicado ahora';
-
-  const segundos = Math.max(1, Math.floor((Date.now() - fecha.getTime()) / 1000));
-  if (segundos < 60) return `Hace ${segundos}s`;
-  const minutos = Math.floor(segundos / 60);
-  if (minutos < 60) return `Hace ${minutos}m`;
-  const horas = Math.floor(minutos / 60);
-  if (horas < 24) return `Hace ${horas}h`;
-  const dias = Math.floor(horas / 24);
-  return `Hace ${dias}d`;
-};
-
-export default function Post({ post, onComentar }) {
+function Post({ post, onComentar }) {
   const router = useRouter();
-  const [mostrarImagenFullscreen, setMostrarImagenFullscreen] = useState(false);
+  const [mostrarEditar, setMostrarEditar] = useState(false);
   const [oculto, setOculto] = useState(false);
+  const [mostrarCompartir, setMostrarCompartir] = useState(false);
+  const [mostrarMenuOpciones, setMostrarMenuOpciones] = useState(false);
+  const [mostrarMenuReporte, setMostrarMenuReporte] = useState(false);
+  const [expandido, setExpandido] = useState(false);
 
-  const usuario = useMemo(() => {
-    if (post?.userName) return post.userName;
-    const uid = post?.userId || 'usuario';
-    return `@${String(uid).slice(0, 6)}`;
-  }, [post?.userId, post?.userName]);
+  // --- FUNCIÓN GLOBAL PARA RENDERIZAR MENCIONES EN NEGRITA ---
+  const renderTextoConMenciones = (textoInput) => {
+    if (!textoInput) return null;
+    const regex = /(@\w+)/g;
+    const partes = textoInput.split(regex);
+    return partes.map((part, index) => {
+      if (part.match(regex)) {
+        return <Text key={index} style={{ fontWeight: '900', color: '#4B5563' }}>{part}</Text>; // Grafito intenso
+      }
+      return part;
+    });
+  };
 
+  const usuario = useMemo(() => post?.userName || 'usuario', [post?.userName]);
   const texto = post?.texto || '';
   const esSubiendo = post?.status === 'uploading';
-  const progresoSubida = Math.max(0, Math.min(100, Number(post?.uploadProgress) || 0));
+  const esLocal = post?.url?.startsWith('file://');
   const esVideo = post?.tipo === 'video' && post?.url;
-  const esVideoSinUrl = post?.tipo === 'video' && !post?.url;
   const esImagen = post?.tipo === 'foto' && post?.url;
   const thumbnailVideo = post?.thumbnailUrl || post?.thumbnailURL || null;
   const comentariosCount = Number(post?.comentariosCount) || 0;
   const postId = post?.postId || post?.id;
   const miId = auth.currentUser?.uid;
   const likesPost = Array.isArray(post?.likes) ? post.likes : [];
-  const likesCount = likesPost.length;
   const yoLikee = !!miId && likesPost.includes(miId);
+  const progresoSubida = Math.max(0, Math.min(100, Number(post.uploadProgress) || 0));
+
   const abrirVideo = () => {
-    if (!post?.url) return;
-    setVideoViewerPayload({ videoUri: post.url });
+    if (!post?.url || esSubiendo) return;
+    DeviceEventEmitter.emit('MEDIA_VIEWER_OPENED');
+    setVideoViewerPayload({ videoUri: post.url, post: post });
     router.push({
       pathname: '/video-viewer',
-      params: {
-        t: String(Date.now()),
-      },
+      params: { t: String(Date.now()) }
+    });
+  };
+
+  const abrirImagen = () => {
+    if (!post?.url || esSubiendo) return;
+    DeviceEventEmitter.emit('MEDIA_VIEWER_OPENED');
+    setVideoViewerPayload({ videoUri: post.url, post: post });
+    router.push({
+      pathname: '/image-viewer',
+      params: { t: String(Date.now()) }
+    });
+  };
+
+  const abrirImagenRepost = (url, repostOriginal) => {
+    if (!url) return;
+    DeviceEventEmitter.emit('MEDIA_VIEWER_OPENED');
+    setVideoViewerPayload({
+      videoUri: url,
+      post: {
+        id: repostOriginal?.id,
+        url: url,
+        tipo: 'foto',
+        userName: repostOriginal?.userName || 'Usuario',
+        userPhotoUrl: repostOriginal?.userPhotoUrl || null,
+        texto: repostOriginal?.texto || '',
+        createdAt: repostOriginal?.createdAt || null
+      }
+    });
+    router.push({
+      pathname: '/image-viewer',
+      params: { t: String(Date.now()) }
     });
   };
 
   const toggleLikePost = async () => {
-    if (!postId || !miId) return;
-
+    if (!postId || !miId || esSubiendo) return;
     try {
-      await updateDoc(doc(db, 'posts', postId), {
-        likes: yoLikee ? arrayRemove(miId) : arrayUnion(miId),
-      });
-    } catch (e) {
-      Alert.alert('Error', e?.message || 'No se pudo actualizar el me gusta.');
-    }
+      await updateDoc(doc(db, 'posts', postId), { likes: yoLikee ? arrayRemove(miId) : arrayUnion(miId) });
+      if (!yoLikee && post.userId !== miId) {
+        await crearNotificacion({ paraUserId: post.userId, tipo: 'like', postId: postId, texto: 'le gusta tu publicación' });
+      }
+    } catch (e) { console.log(e); }
   };
 
-  
+  const irAlPerfil = () => {
+    if (!post?.userId || esSubiendo) return;
+    if (post.userId === auth.currentUser?.uid) router.push('/(tabs)/perfil');
+    else router.push({ pathname: '/(tabs)/perfilAjeno', params: { userId: post.userId } });
+  };
 
   const handleOpcionesPost = () => {
-    const miId = auth.currentUser?.uid;
-    const esMio = post?.userId && miId && post.userId === miId;
+    if (esSubiendo) return;
+    setMostrarMenuOpciones(true);
+  };
 
-    const reportarPost = async () => {
-      if (!postId) return;
-      try {
-        await addDoc(collection(db, 'reportes'), {
-          tipo: 'post',
-          postId,
-          postUserId: post?.userId || null,
-          reporterId: miId || null,
-          motivo: 'contenido-inapropiado',
-          createdAt: serverTimestamp(),
-        });
-        Alert.alert('Gracias', 'Recibimos tu reporte.');
-      } catch (e) {
-        Alert.alert('Error', e?.message || 'No se pudo enviar el reporte.');
-      }
-    };
-
-    const eliminarPost = async () => {
-      if (!postId) return;
-      try {
-        await deleteDoc(doc(db, 'posts', postId));
-      } catch (e) {
-        Alert.alert('Error', e?.message || 'No se pudo eliminar el post.');
-      }
-    };
-
-    const ocultarPost = () => {
-      setOculto(true);
-    };
-
-    Alert.alert(esMio ? 'Tu post' : 'Opciones', 'Que deseas hacer?', [
-      { text: 'Cancelar', style: 'cancel' },
-      ...(esMio
-        ? [{ text: 'Eliminar post', style: 'destructive', onPress: eliminarPost }]
-        : [
-            { text: 'Ocultar post', onPress: ocultarPost },
-            { text: 'Reportar post', style: 'destructive', onPress: reportarPost },
-          ]),
+  const confirmarEliminar = async () => {
+    setMostrarMenuOpciones(false);
+    Alert.alert('Eliminar', '¿Estás seguro?', [
+      { text: 'No' },
+      { text: 'Sí, eliminar', style: 'destructive', onPress: async () => {
+        if (!postId) return;
+        try {
+          if (post?.url) await borrarArchivoPorUrl(post.url);
+          if (post?.thumbnailUrl) await borrarArchivoPorUrl(post.thumbnailUrl);
+          if (post?.thumbnailLqUrl) await borrarArchivoPorUrl(post.thumbnailLqUrl);
+          await borrarPostConComentarios(postId, 'posts');
+        }
+        catch (e) { Alert.alert('Error', 'No se pudo eliminar.'); }
+      }}
     ]);
   };
 
-  if (oculto) {
-    return null;
-  }
+  const ejecutarReportarPost = async (motivo) => {
+    setMostrarMenuReporte(false);
+    try {
+      await enviarReporte({
+        tipo: 'post',
+        idContenido: postId,
+        idAutor: post.userId,
+        motivo: motivo,
+        extraData: {
+          texto: texto || '',
+          url: post.url || post.thumbnailUrl || null,
+          userName: usuario
+        }
+      });
+      Alert.alert("Gracias", "Tu reporte ha sido enviado a los administradores para su revisión.");
+    } catch (e) {
+      Alert.alert("Error", "No se pudo enviar el reporte.");
+    }
+  };
+
+  const handleReportarPost = (motivo) => {
+    ejecutarReportarPost(motivo);
+  };
+
+  const obtenerOpcionesMenu = () => {
+    if (esMio) {
+      const esEspontanea = post?.esEspontanea || post?.tipo === 'desafio' || post?.tipo === 'espontanea';
+      const opciones = [];
+
+      if (!esEspontanea) {
+        opciones.push({
+          label: 'Editar publicación',
+          icon: 'create-outline',
+          color: '#374151',
+          onPress: () => setMostrarEditar(true)
+        });
+      }
+
+      opciones.push({
+        label: 'Eliminar publicación',
+        icon: 'trash-outline',
+        color: '#EF4444',
+        onPress: confirmarEliminar
+      });
+
+      return opciones;
+    } else {
+      return [
+        {
+          label: 'Ocultar esta publicación',
+          icon: 'eye-off-outline',
+          color: '#374151',
+          onPress: () => setOculto(true)
+        },
+        {
+          label: 'Reportar contenido',
+          icon: 'flag-outline',
+          color: '#EF4444',
+          onPress: () => setMostrarMenuReporte(true)
+        }
+      ];
+    }
+  };
+
+  if (oculto) return null;
+
+  const esMio = post?.userId && miId && post.userId === miId;
+  const tieneMedia = esImagen || esVideo;
 
   return (
-    <View style={styles.postContainer}>
-      <View style={styles.header}>
-        <Image
-          source={{ uri: 'https://picsum.photos/100/100' }}
-          style={styles.avatar}
-        />
-        <View style={styles.headerTextContainer}>
-          <Text style={styles.username}>{usuario}</Text>
-          <Text style={styles.timestamp}>{tiempoRelativo(post?.createdAt)}</Text>
-        </View>
+    <View style={post.esEspontanea ? styles.postOuterEspontanea : styles.postOuterCommon}>
+      <View style={[styles.postContainer, post.esEspontanea && styles.postEspontaneaContainer]}>
+        <View style={tieneMedia ? styles.fixedHeightContent : styles.fixedHeightContentTextOnly}>
 
-        <TouchableOpacity style={styles.postMenuBtn} onPress={handleOpcionesPost}>
-          <Ionicons name="ellipsis-horizontal" size={18} color={COLORS.graphiteSoft} />
-        </TouchableOpacity>
-      </View>
+          {/* SI ES UN REPOST (INDICADOR SUPERIOR) */}
+          {post.tipo === 'repost' && (
+            <View style={styles.repostTopBadge}>
+              <Ionicons name="repeat" size={14} color="#FF6600" />
+              <Text style={styles.repostTopBadgeTxt}>{usuario} compartió esto</Text>
+            </View>
+          )}
 
-      {esImagen && (
-        <Pressable onPress={() => setMostrarImagenFullscreen(true)}>
-          <Image
-            source={{ uri: post.url }}
-            style={styles.postImage}
-          />
-        </Pressable>
-      )}
+          <View style={styles.header}>
+            <TouchableOpacity style={styles.headerUserInfo} onPress={irAlPerfil}>
+              <Image
+                source={{ uri: post?.userPhotoUrl || 'https://picsum.photos/100' }}
+                style={styles.avatar}
+                contentFit="cover"
+                cachePolicy="memory-disk"
+              />
+              <View style={styles.headerTextContainer}>
+                <View style={styles.nameRow}>
+                  <Text style={styles.username} numberOfLines={1}>{usuario}</Text>
+                  {post.esEspontanea && (
+                    <View style={styles.espontaneaBadge}>
+                      <Ionicons name="sparkles" size={12} color="#FF6600" />
+                      <Text style={styles.espontaneaText}>ESPONTÁNEA</Text>
+                    </View>
+                  )}
+                </View>
 
-{esVideo && (
-  <Pressable style={styles.videoWrap} onPress={abrirVideo}>
-    <View style={styles.videoPlaceholder}>
-      {thumbnailVideo ? (
-        <Image source={{ uri: thumbnailVideo }} style={styles.postImage} />
-      ) : (
-        <View style={styles.videoNoThumbFallback} />
-      )}
-    </View>
+                {/* UBICACIÓN DEL POSTEO */}
+                {(post.partido || post.localidad || post.barrio) && (
+                  <View style={styles.locationRow}>
+                    <Ionicons name="location" size={10} color="#6B7280" />
+                    <Text style={styles.locationText}>
+                      {post.localidad || post.partido || 'Zona'}
+                      {post.barrio ? `, ${post.barrio}` : ''}
+                    </Text>
+                  </View>
+                )}
 
-    <View style={styles.videoTypeBadge} pointerEvents="none">
-      <Ionicons name="videocam" size={12} color="#FFFFFF" />
-      <Text style={styles.videoTypeBadgeText}>VIDEO</Text>
-    </View>
-
-    <View style={styles.videoTapOverlay} pointerEvents="none">
-      <View style={styles.videoCenterPlay}>
-        <Ionicons name="play-circle" size={74} color="#FFFFFF" />
-        <Text style={styles.videoCenterPlayText}>TOCAR</Text>
-      </View>
-    </View>
-  </Pressable>
-)}
-
-      {esVideoSinUrl && (
-        <View style={styles.videoPendingWrap}>
-          <View style={styles.videoPendingFallback} />
-          <View style={styles.videoPendingBadge}>
-            <Ionicons name="cloud-upload-outline" size={18} color="#FFFFFF" />
-            <Text style={styles.videoPendingText}>Subiendo video...</Text>
+                <Text style={styles.timestamp}>{esSubiendo ? 'Publicando...' : tiempoRelativo(post?.createdAt)}</Text>
+              </View>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.postMenuBtn} onPress={handleOpcionesPost} disabled={esSubiendo}><Ionicons name="ellipsis-vertical" size={18} color="#6B7280" /></TouchableOpacity>
           </View>
+
+          {/* ALTURA FIJA PARA TEXTO PARA NO ROMPER EL SCROLL */}
+          <TouchableOpacity
+            style={tieneMedia ? styles.captionContainer : styles.captionContainerTextOnly}
+            onPress={() => setExpandido(!expandido)}
+            activeOpacity={0.8}
+          >
+            {texto ? (
+              <Text
+                style={styles.caption}
+                numberOfLines={expandido ? undefined : (tieneMedia ? 3 : 5)}
+                maxFontSizeMultiplier={1.3}
+              >
+                {renderTextoConMenciones(texto)}
+              </Text>
+            ) : <View style={{height: 10}} />}
+          </TouchableOpacity>
+
+          {/* SI ES UN REPOST (TARJETA ANIDADA PROFESIONAL) */}
+          {post.tipo === 'repost' && post.repostOriginal && (
+            <TouchableOpacity
+              style={styles.repostNestedCard}
+              onPress={() => {
+                if (post.repostOriginal.id) {
+                  router.push({
+                    pathname: '/postDetalle',
+                    params: {
+                      postId: post.repostOriginal.id,
+                      collectionName: post.repostOriginal.collectionName || 'posts'
+                    }
+                  });
+                }
+              }}
+              activeOpacity={0.9}
+            >
+              <View style={styles.repostHeaderRow}>
+                <Image
+                  source={{ uri: post.repostOriginal.userPhotoUrl || 'https://picsum.photos/100' }}
+                  style={styles.repostAvatar}
+                  contentFit="cover"
+                  cachePolicy="memory-disk"
+                />
+                <View style={{ flex: 1, marginLeft: 8 }}>
+                  <Text style={styles.repostAuthorName} numberOfLines={1}>{post.repostOriginal.userName || 'Usuario'}</Text>
+                  {(post.repostOriginal.localidad || post.repostOriginal.partido || post.repostOriginal.barrio) && (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 1, marginBottom: 1 }}>
+                      <Ionicons name="location" size={10} color="#FF6600" />
+                      <Text style={{ fontSize: 11, fontWeight: '700', color: '#4B5563', marginLeft: 3 }} numberOfLines={1}>
+                        {post.repostOriginal.localidad || post.repostOriginal.partido || 'Zona'}
+                        {post.repostOriginal.barrio ? `, ${post.repostOriginal.barrio}` : ''}
+                      </Text>
+                    </View>
+                  )}
+                  <Text style={styles.repostDateText}>{tiempoRelativo(post.repostOriginal.createdAt)}</Text>
+                </View>
+              </View>
+
+              {post.repostOriginal.texto ? (
+                <Text style={styles.repostCaptionText} numberOfLines={3}>{renderTextoConMenciones(post.repostOriginal.texto)}</Text>
+              ) : null}
+
+              {(post.repostOriginal.url || post.repostOriginal.thumbnailUrl) && (
+                <Pressable
+                  onPress={(e) => {
+                    e.stopPropagation?.();
+                    abrirImagenRepost(post.repostOriginal.url || post.repostOriginal.thumbnailUrl, post.repostOriginal);
+                  }}
+                >
+                  <Image
+                    source={{ uri: post.repostOriginal.thumbnailUrl || post.repostOriginal.url }}
+                    style={styles.repostImageMedia}
+                    contentFit="cover"
+                    cachePolicy="memory-disk"
+                  />
+                </Pressable>
+              )}
+            </TouchableOpacity>
+          )}
+
+          {/* --- ESTADO SUBIENDO (BARRA DE PROGRESO) --- */}
+          {esSubiendo && (
+            <View style={styles.contenedorSubidafixed}>
+              <View style={styles.infoSubidaFila}>
+                <View style={styles.iconoSubidaPill}>
+                  <ActivityIndicator size="small" color="#FF6600" style={{ transform: [{ scale: 0.8 }] }} />
+                  <Text style={styles.textoSubiendoPill}>Publicando...</Text>
+                </View>
+                <Text style={styles.porcentajeTexto}>{progresoSubida}%</Text>
+              </View>
+
+              <View style={styles.miniBarraCargaBg}>
+                <View style={[styles.miniBarraCargaFill, { width: `${progresoSubida}%` }]} />
+              </View>
+            </View>
+          )}
+
+          {esImagen && (
+            <Pressable onPress={abrirImagen} style={styles.mediaContainer}>
+              <Image
+                source={{ uri: post.url }}
+                placeholder={{ uri: post.thumbnailLqUrl || post.thumbnailUrl || post.url }}
+                placeholderContentFit="cover"
+                style={[styles.postImage, esSubiendo && !esLocal && { opacity: 0.6 }]}
+                contentFit="cover"
+                transition={200}
+                cachePolicy="memory-disk"
+                priority="high"
+                blurRadius={(esSubiendo && !esLocal) ? 10 : 0}
+              />
+              {esSubiendo && !esLocal && <ActivityIndicator style={styles.spinner} color="#FF6600" />}
+
+              {/* TEXTO SOBRE MEDIA (Vista Previa) */}
+              {post.textoSobreMedia && !esSubiendo && (
+                <View style={styles.overlayTextoContainer}>
+                  <Text style={styles.overlayTexto}>{post.textoSobreMedia}</Text>
+                </View>
+              )}
+            </Pressable>
+          )}
+
+          {esVideo && (
+            <Pressable style={styles.videoWrap} onPress={abrirVideo}>
+              <Image
+                source={{ uri: thumbnailVideo || post.url }}
+                placeholder={{ uri: post.thumbnailLqUrl }}
+                placeholderContentFit="cover"
+                style={[styles.postImage, esSubiendo && !esLocal && { opacity: 0.6 }]}
+                contentFit="cover"
+                transition={400}
+                cachePolicy="memory-disk"
+                priority="high"
+                blurRadius={(esSubiendo && !esLocal) ? 10 : 0}
+              />
+              {!esSubiendo || esLocal ? (
+                <View style={styles.videoTapOverlay}>
+                  <View style={styles.playButtonCirclePost}>
+                    <Ionicons name="play" size={50} color="#FFFFFF" style={{ marginLeft: 6 }} />
+                  </View>
+
+                  {/* TEXTO SOBRE MEDIA (Vista Previa) */}
+                  {post.textoSobreMedia && (
+                    <View style={styles.overlayTextoContainer}>
+                      <Text style={styles.overlayTexto}>{post.textoSobreMedia}</Text>
+                    </View>
+                  )}
+                </View>
+              ) : (
+                <ActivityIndicator style={styles.spinner} color="#FF6600" />
+              )}
+            </Pressable>
+          )}
         </View>
-      )}
 
-      {/* Texto del post y comentario agregado */}
-      {texto ? <Text style={styles.caption}>{texto}</Text> : null}
-
-      {esSubiendo && (
-        <View style={styles.estadoSubiendoWrap}>
-          <Ionicons name="sync-outline" size={14} color="#92400E" />
-          <Text style={styles.estadoSubiendoTxt}>Publicando {progresoSubida}%</Text>
-        </View>
-      )}
-
-      {esSubiendo && (
-        <View style={styles.barraWrap}>
-          <View style={styles.barraBase}>
-            <View style={[styles.barraFill, { width: `${progresoSubida}%` }]} />
+        {!esSubiendo && (
+          <View style={styles.actions}>
+            <TouchableOpacity style={styles.actionBtn} onPress={toggleLikePost}>
+              <Ionicons name={yoLikee ? 'heart' : 'heart-outline'} size={25} color={yoLikee ? '#FF6600' : '#374151'} />
+              {likesPost.length > 0 ? (
+                <Text style={[styles.actionLabel, yoLikee && { color: '#FF6600', fontWeight: '700' }]} maxFontSizeMultiplier={1.25} numberOfLines={1}>
+                  {likesPost.length}
+                </Text>
+              ) : null}
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.actionBtn} onPress={() => onComentar?.(post)}>
+              <Ionicons name="chatbubble-outline" size={25} color="#374151" />
+              {comentariosCount > 0 ? (
+                <Text style={styles.actionLabel} maxFontSizeMultiplier={1.25} numberOfLines={1}>
+                  {comentariosCount}
+                </Text>
+              ) : null}
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.actionBtn} onPress={() => setMostrarCompartir(true)}>
+              <Ionicons name="share-social-outline" size={25} color="#374151" />
+            </TouchableOpacity>
           </View>
-        </View>
-      )}
-
-      <View style={styles.actions}>
-        <TouchableOpacity style={styles.actionBtn} onPress={toggleLikePost}>
-          <Ionicons name={yoLikee ? 'heart' : 'heart-outline'} size={22} color={yoLikee ? COLORS.likeBlend : '#555'} />
-          <Text style={[styles.actionLabel, yoLikee ? styles.actionLabelActive : null]}>
-            Me gusta {likesCount > 0 ? `(${likesCount})` : ''}
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.actionBtn} onPress={() => onComentar?.(post)}>
-          <Ionicons name="chatbubble-outline" size={22} color="#555" />
-          <Text style={styles.actionLabel}>Comentar {comentariosCount > 0 ? `(${comentariosCount})` : ''}</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.actionBtn}>
-          <Ionicons name="share-social-outline" size={22} color="#555" />
-          <Text style={styles.actionLabel}>Compartir</Text>
-        </TouchableOpacity>
+        )}
       </View>
-      
       <View style={styles.divider} />
 
-      <Modal
-        visible={mostrarImagenFullscreen}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setMostrarImagenFullscreen(false)}
-      >
-        <View style={styles.viewerBackdrop}>
-          <Pressable style={styles.viewerCloseBtn} onPress={() => setMostrarImagenFullscreen(false)}>
-            <Ionicons name="close" size={24} color="#FFFFFF" />
-          </Pressable>
+      {/* MODAL GLOBAL DE OPCIONES */}
+      <SelectorOpcionesModal
+        visible={mostrarMenuOpciones}
+        onClose={() => setMostrarMenuOpciones(false)}
+        titulo="Opciones de publicación"
+        opciones={obtenerOpcionesMenu()}
+      />
 
-          <Image
-            source={{ uri: post.url }}
-            style={styles.viewerImage}
-            resizeMode="contain"
-          />
+      {/* MODAL GLOBAL DE REPORTE */}
+      <SelectorReporteModal
+        visible={mostrarMenuReporte}
+        onClose={() => setMostrarMenuReporte(false)}
+        onReportar={handleReportarPost}
+      />
 
-          {texto ? <Text style={styles.viewerCaption}>{texto}</Text> : null}
-        </View>
-      </Modal>
+      <EditarPost visible={mostrarEditar} post={post} onClose={() => setMostrarEditar(false)} />
+
+      <SelectorCompartir
+        visible={mostrarCompartir}
+        onClose={() => setMostrarCompartir(false)}
+        contenido={{
+          id: postId,
+          tipo: 'post',
+          titulo: (post.tipo === 'repost' && post.repostOriginal) ? (texto || post.repostOriginal.texto || 'Publicación') : (texto || 'Publicación'),
+          imagen: (post.tipo === 'repost' && post.repostOriginal) ? (post.repostOriginal.thumbnailUrl || post.repostOriginal.url || post.url) : (esImagen ? post.url : (thumbnailVideo || post.url)),
+          subTitulo: (post.tipo === 'repost' && post.repostOriginal) ? `De ${post.repostOriginal.userName || 'Usuario'}` : `De ${usuario}`,
+          postObjeto: post
+        }}
+      />
     </View>
   );
 }
 
+export default React.memo(Post);
+
 const styles = StyleSheet.create({
-  postContainer: { 
-    backgroundColor: '#FFF', 
-    marginBottom: 0, 
-    overflow: 'hidden',
-  },
-  header: { 
-    flexDirection: 'row', 
-    alignItems: 'center', 
-    paddingHorizontal: 12, 
-    paddingTop: 6, // Más pegado a la parte superior
-    paddingBottom: 8,
-  },
-  avatar: { 
-    width: 34, 
-    height: 34, 
-    borderRadius: 17, 
-    marginRight: 10,
-    backgroundColor: '#DDD' 
-  },
-  headerTextContainer: { flex: 1 },
-  username: { 
-    fontWeight: 'bold', 
-    fontSize: 14, 
-    color: '#333'
-  },
-  timestamp: {
-    fontSize: 11,
-    color: '#888'
-  },
-  postMenuBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#F3F4F6',
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-  },
-  postImage: { 
-    width: '100%', 
-    height: 400, 
-    resizeMode: 'cover' 
-  },
-  videoWrap: {
-    position: 'relative',
-    width: '100%',
-    height: 400,
-    maxHeight: 400,
-    backgroundColor: '#111827',
-    overflow: 'hidden',
-    zIndex: 0,
-  },
-  videoTapOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    zIndex: 12,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.18)',
-  },
-  videoCenterPlay: {
-    width: 118,
-    height: 118,
-    borderRadius: 59,
-    backgroundColor: 'rgba(249,115,22,0.96)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 3,
-    borderColor: '#FFFFFF',
-    elevation: 6,
-    shadowColor: '#000000',
-    shadowOpacity: 0.35,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 3 },
-  },
-  videoCenterPlayText: {
-    marginTop: 2,
-    color: '#FFFFFF',
-    fontSize: 11,
-    fontWeight: '900',
-    letterSpacing: 0.6,
-  },
-  videoTapBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-  },
-  videoTapBadgeText: {
-    marginLeft: 4,
-    color: '#FFFFFF',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  videoTypeBadge: {
+  postOuterEspontanea: { backgroundColor: '#FFFFFF', paddingBottom: 10 },
+  postOuterCommon: { backgroundColor: '#FFFFFF' },
+  postContainer: { backgroundColor: '#FFF', marginBottom: 0, overflow: 'hidden' },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, paddingTop: 6, paddingBottom: 2 },
+  headerUserInfo: { flexDirection: 'row', alignItems: 'center', flex: 1 },
+  avatar: { width: 42, height: 42, borderRadius: 21, marginRight: 12, backgroundColor: '#DDD' },
+  headerTextContainer: { flex: 1, justifyContent: 'center' },
+  nameRow: { flexDirection: 'row', alignItems: 'center' },
+  username: { fontWeight: '800', fontSize: 16, color: '#111827', flexShrink: 1 },
+  espontaneaBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF7ED', paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6, marginLeft: 8, borderWidth: 1, borderColor: '#FFEDD5' },
+  espontaneaText: { color: '#FF6600', fontSize: 11, fontWeight: '900', marginLeft: 2 },
+  pendienteBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FEF3C7', paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6, marginLeft: 8, borderWidth: 1, borderColor: '#FDE68A' },
+  pendienteText: { color: '#D97706', fontSize: 11, fontWeight: '900', marginLeft: 2 },
+  timestamp: { fontSize: 12, color: '#888', marginTop: 1 },
+  locationRow: { flexDirection: 'row', alignItems: 'center', marginTop: 1 },
+  locationText: { fontSize: 12, color: '#4B5563', marginLeft: 3, fontWeight: '700' },
+  postMenuBtn: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F3F4F6', borderWidth: 1, borderColor: '#E5E7EB' },
+  postImage: { width: '100%', height: 400 },
+  mediaContainer: { position: 'relative', width: '100%', height: 400 },
+  videoWrap: { position: 'relative', width: '100%', height: 400, backgroundColor: '#111827', overflow: 'hidden' },
+  videoTapOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.12)' },
+  playButtonCirclePost: { width: 80, height: 80, borderRadius: 40, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: 'rgba(255,255,255,0.3)' },
+  overlayTextoContainer: {
     position: 'absolute',
-    top: 10,
-    left: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.58)',
-    borderRadius: 999,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    zIndex: 13,
-  },
-  videoTypeBadgeText: {
-    marginLeft: 4,
-    color: '#FFFFFF',
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 0.4,
-  },
-  videoPendingWrap: {
-    position: 'relative',
-    width: '100%',
-    height: 400,
-    backgroundColor: '#111827',
-  },
-  videoPendingFallback: {
-    width: '100%',
-    height: '100%',
-    backgroundColor: '#0F172A',
-  },
-  videoPendingBadge: {
-    position: 'absolute',
-    bottom: 12,
-    right: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-  },
-  videoPendingText: {
-    marginLeft: 6,
-    color: '#FFFFFF',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  videoPlaceholder: {
-    width: '100%',
-    height: '100%',
-    position: 'relative',
-  },
-  videoNoThumbFallback: {
-    width: '100%',
-    height: '100%',
-    backgroundColor: '#0B1220',
-  },
-  videoPlayerLayer: {
-    ...StyleSheet.absoluteFillObject,
-    zIndex: 7,
-  },
-  videoBadge: {
-    position: 'absolute',
-    right: 12,
-    bottom: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-  },
-  videoBadgeText: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    fontWeight: '700',
-    marginLeft: 4,
-  },
-  caption: { 
-    paddingHorizontal: 12, 
-    paddingTop: 8,
-    paddingBottom: 8,
-    fontSize: 15, 
-    color: '#333' 
-  },
-  estadoSubiendoWrap: {
-    marginTop: 2,
-    marginHorizontal: 12,
-    marginBottom: 8,
-    alignSelf: 'flex-start',
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FEF3C7',
-    borderColor: '#FDE68A',
-    borderWidth: 1,
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-  },
-  estadoSubiendoTxt: {
-    marginLeft: 6,
-    color: '#92400E',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  barraWrap: {
-    marginHorizontal: 12,
-    marginBottom: 10,
-  },
-  barraBase: {
-    width: '100%',
-    height: 6,
-    borderRadius: 999,
-    backgroundColor: '#E5E7EB',
-    overflow: 'hidden',
-  },
-  barraFill: {
-    height: '100%',
-    borderRadius: 999,
-    backgroundColor: '#F97316',
-  },
-  actions: { 
-    flexDirection: 'row', 
-    justifyContent: 'space-around', 
-    paddingTop: 10,
-    paddingBottom: 14,
-    borderTopWidth: 1, 
-    borderColor: '#F0F0F0' 
-  },
-  actionBtn: { flexDirection: 'row', alignItems: 'center' },
-  actionLabel: { marginLeft: 5, color: '#555', fontSize: 12 },
-  actionLabelActive: { color: COLORS.likeBlend, fontWeight: '700' },
-  divider: {
-    height: 6, 
-    backgroundColor: '#F8F8F8'
-  },
-  viewerBackdrop: {
-    flex: 1,
-    backgroundColor: '#000000',
-    justifyContent: 'center',
-    alignItems: 'center',
+    bottom: 10,
+    left: 15,
+    right: 15,
+    backgroundColor: 'rgba(0,0,0,0.4)',
     paddingHorizontal: 12,
-    paddingVertical: 20,
+    paddingVertical: 6,
+    borderRadius: 8,
+    alignSelf: 'flex-start',
   },
-  viewerCloseBtn: {
-    position: 'absolute',
-    top: 48,
-    right: 16,
-    zIndex: 10,
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    alignItems: 'center',
-    justifyContent: 'center',
+  overlayTexto: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: 'bold',
+    textAlign: 'center',
   },
-  viewerImage: {
-    width: '100%',
-    height: '78%',
+  repostTopBadge: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8, paddingHorizontal: 4 },
+  repostTopBadgeTxt: { fontSize: 13, fontWeight: '700', color: '#FF6600' },
+  repostNestedCard: { backgroundColor: '#F9FAFB', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 14, padding: 12, marginTop: 8, marginBottom: 8, overflow: 'hidden' },
+  repostHeaderRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
+  repostAvatar: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#E5E7EB' },
+  repostAuthorName: { fontSize: 14, fontWeight: '700', color: '#111827' },
+  repostDateText: { fontSize: 11, color: '#9CA3AF' },
+  repostCaptionText: { fontSize: 14, color: '#374151', marginBottom: 8, lineHeight: 20 },
+  repostImageMedia: { width: '100%', height: 180, borderRadius: 10, backgroundColor: '#E5E7EB', marginTop: 4 },
+  caption: { paddingHorizontal: 12, paddingTop: 8, paddingBottom: 8, fontSize: 17, color: '#333' },
+  actions: { flexDirection: 'row', justifyContent: 'space-between', paddingTop: 10, paddingBottom: 14, borderTopWidth: 1, borderColor: '#F0F0F0', paddingHorizontal: 4 },
+  actionBtn: { flexDirection: 'row', alignItems: 'center', flex: 1, justifyContent: 'center', minWidth: 0 },
+  actionLabel: { marginLeft: 4, color: '#374151', fontSize: 13, fontWeight: '700', flexShrink: 1 },
+  divider: { height: 8, backgroundColor: '#E5E7EB', borderTopWidth: 1, borderBottomWidth: 1, borderColor: '#D1D5DB' },
+  fixedHeightContent: { minHeight: 460, maxHeight: 1200, overflow: 'hidden' },
+  fixedHeightContentTextOnly: { minHeight: 120, maxHeight: 1200, overflow: 'hidden' },
+  captionContainer: {
+    minHeight: 10,
+    maxHeight: 600,
+    justifyContent: 'flex-start',
+    paddingHorizontal: 12,
+    paddingTop: 0,
+    paddingBottom: 4,
   },
-  viewerCaption: {
-    width: '100%',
-    color: '#FFFFFF',
-    fontSize: 15,
-    lineHeight: 21,
-    marginTop: 12,
-    paddingHorizontal: 8,
+  captionContainerTextOnly: {
+    minHeight: 40,
+    maxHeight: 800,
+    justifyContent: 'flex-start',
+    paddingHorizontal: 12,
+    paddingTop: 8,
   },
+  contenedorSubidafixed: { height: 50, paddingHorizontal: 15, justifyContent: 'center', backgroundColor: '#FAFAFA' },
+  postEspontaneaContainer: {
+    borderWidth: 2,
+    borderColor: '#FF914D',
+    marginHorizontal: 8,
+    borderRadius: 16,
+    marginTop: 10,
+    marginBottom: 12,
+    backgroundColor: '#FFFBF5',
+    overflow: 'hidden'
+  },
+  contenedorSubida: { paddingHorizontal: 15, paddingVertical: 12, backgroundColor: '#FAFAFA' },
+  infoSubidaFila: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  iconoSubidaPill: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF5F0', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20, borderWidth: 1, borderColor: '#FFE0CC' },
+  textoSubiendoPill: { fontSize: 11, color: '#FF6600', fontWeight: '900', marginLeft: 4, textTransform: 'uppercase' },
+  porcentajeTexto: { fontSize: 13, color: '#FF6600', fontWeight: '800' },
+  miniBarraCargaBg: { height: 6, backgroundColor: '#E5E7EB', borderRadius: 3, overflow: 'hidden' },
+  miniBarraCargaFill: { height: '100%', backgroundColor: '#FF6600', borderRadius: 3 },
+  spinner: { position: 'absolute', alignSelf: 'center', top: '45%' },
 });

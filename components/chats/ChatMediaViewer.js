@@ -18,7 +18,13 @@ export default function ChatMediaViewer({ archivo, alCerrar }) {
         />
       ) : null}
 
-      <TouchableOpacity style={styles.closeBtn} onPress={alCerrar}>
+      <TouchableOpacity style={styles.closeBtn} onPress={() => {
+        if (player) {
+          player.pause();
+          console.log('🎬 [Video Chats] Reproductor pausado al cerrar el visor.');
+        }
+        alCerrar();
+      }}>
         <Ionicons name="close" size={40} color="white" />
       </TouchableOpacity>
     </View>

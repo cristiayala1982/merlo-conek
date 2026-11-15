@@ -20,7 +20,7 @@ const MascotaCard = ({ item, onPress, miUid, onLike, onMore, onShare }) => {
   let colorEstado = '#6B7280';
   let labelEstado = 'Mascota';
   if (esPerdido) { colorEstado = '#EF4444'; labelEstado = 'SE PERDIÓ'; }
-  if (esEncontrado) { colorEstado = '#3B82F6'; labelEstado = 'LO ENCONTRÉ'; }
+  if (esEncontrado) { colorEstado = '#3B82F6'; labelEstado = 'VISTO'; }
   if (esAdopcion) { colorEstado = '#10B981'; labelEstado = 'EN ADOPCIÓN'; }
   if (esReencuentro) { colorEstado = '#8B5CF6'; labelEstado = '¡REENCUENTRO!'; }
 
@@ -65,9 +65,14 @@ const MascotaCard = ({ item, onPress, miUid, onLike, onMore, onShare }) => {
       <View style={styles.cardContent}>
         <Text style={styles.cardTitle} numberOfLines={1}>{item.nombre || 'Sin nombre'}</Text>
 
-        <View style={styles.barrioRow}>
-          <Ionicons name="location" size={12} color="#6B7280" />
-          <Text style={styles.cardBarrio} numberOfLines={1}>{item.barrio}</Text>
+        <View style={styles.locationContainer}>
+          <View style={styles.barrioRow}>
+            <Ionicons name="location" size={12} color="#10B981" />
+            <Text style={styles.cardBarrio} numberOfLines={1}>
+              {item.provincia ? `${item.provincia}, ` : ''}{item.partido || item.localidad || ''}{item.localidad && item.partido ? `, ${item.localidad}` : ''}
+            </Text>
+          </View>
+          {item.barrio ? <Text style={styles.cardProvincia} numberOfLines={1}>({item.barrio})</Text> : null}
         </View>
 
         <View style={styles.cardFooter}>
@@ -85,12 +90,10 @@ const MascotaCard = ({ item, onPress, miUid, onLike, onMore, onShare }) => {
           </View>
 
           <View style={styles.cardActions}>
-            {!esMio && (
-              <TouchableOpacity style={styles.cardActionBtn} onPress={(e) => { e.stopPropagation(); onLike(item); }}>
-                <Ionicons name={loLikee ? "heart" : "heart-outline"} size={22} color={loLikee ? "#EF4444" : "#6B7280"} />
-                {likes.length > 0 && <Text style={[styles.likeCount, loLikee && { color: "#EF4444" }]}>{likes.length}</Text>}
-              </TouchableOpacity>
-            )}
+            <TouchableOpacity style={styles.cardActionBtn} onPress={(e) => { e.stopPropagation(); onLike(item); }}>
+              <Ionicons name={loLikee ? "heart" : "heart-outline"} size={22} color={loLikee ? "#FF6600" : "#6B7280"} />
+              {likes.length > 0 && <Text style={[styles.likeCount, loLikee && { color: "#FF6600" }]}>{likes.length}</Text>}
+            </TouchableOpacity>
 
             <TouchableOpacity style={styles.cardActionBtn} onPress={(e) => { e.stopPropagation(); onShare(item); }}>
               <Ionicons name="share-social-outline" size={22} color="#6B7280" />
@@ -182,9 +185,21 @@ const styles = StyleSheet.create({
     gap: 4
   },
   cardBarrio: {
-    fontSize: 13,
-    color: '#4B5563',
+    fontSize: 12,
+    color: '#1F2937',
+    fontWeight: '700',
+    flex: 1
+  },
+  cardProvincia: {
+    fontSize: 11,
+    color: '#6B7280',
+    marginLeft: 16,
+    marginTop: -1,
     fontWeight: '700'
+  },
+  locationContainer: {
+    marginTop: 4,
+    marginBottom: 2
   },
   cardFooter: {
     flexDirection: 'row',

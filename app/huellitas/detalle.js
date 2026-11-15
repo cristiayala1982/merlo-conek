@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { doc, onSnapshot } from 'firebase/firestore';
+import { Linking, Platform, Alert } from 'react-native';
 import { db, auth } from '../../firebaseConfig';
 import { Image } from 'expo-image';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -35,6 +36,17 @@ export default function HuellitaDetalleScreen() {
     if (!item) return;
     const msg = `[HUELLITAS] ¡Hola! Te contacto por la mascota "${item.nombre || item.especie}" que publicaste en ${item.barrio}.`;
     router.push({ pathname: '/chats', params: { userId: item.userId, prefilledMsg: msg } });
+  };
+
+  const abrirMapaExterno = () => {
+    if (!item?.coords) return;
+    const { latitude, longitude } = item.coords;
+    const label = encodeURIComponent(`Mascota: ${item.nombre || item.especie}`);
+    const url = Platform.select({
+      ios: `maps:0,0?q=${label}@${latitude},${longitude}`,
+      android: `geo:0,0?q=${latitude},${longitude}(${label})`
+    });
+    Linking.openURL(url).catch(() => Alert.alert("Error", "No se pudo abrir el mapa."));
   };
 
   if (loading) return <View style={styles.center}><ActivityIndicator size="large" color="#10B981" /></View>;
@@ -71,7 +83,14 @@ export default function HuellitaDetalleScreen() {
             >
               {fotos.filter(Boolean).map((f, i) => (
                 <View key={i} style={styles.carouselPage}>
-                  <Image source={{ uri: f }} style={styles.carouselImage} contentFit="cover" />
+                  <Image
+                    source={{ uri: f }}
+                    placeholder={{ uri: item.thumbnailLqUrls?.[i] || null }}
+                    placeholderContentFit="cover"
+                    style={styles.carouselImage}
+                    contentFit="cover"
+                    transition={200}
+                  />
                 </View>
               ))}
             </ScrollView>
@@ -96,7 +115,9 @@ export default function HuellitaDetalleScreen() {
               )}
               <View style={{ flex: 1 }}>
                 <Text style={styles.userName}>{item.userName}</Text>
-                <Text style={styles.userLoc}>{item.barrio}, {item.localidad}</Text>
+                <Text style={styles.userLoc}>
+                    {item.provincia}{item.partido ? `, ${item.partido}` : ''}{item.localidad ? `, ${item.localidad}` : ''}{item.barrio ? `\n(${item.barrio})` : ''}
+                </Text>
               </View>
 
               <View style={styles.actionsRow}>
@@ -113,17 +134,39 @@ export default function HuellitaDetalleScreen() {
            </View>
 
            <View style={[styles.estadoBadge, { backgroundColor: item.estado === 'perdido' ? '#EF4444' : (item.estado === 'encontrado' ? '#3B82F6' : '#10B981') }]}>
-              <Text style={styles.estadoBadgeText}>{item.estado.toUpperCase()}</Text>
+              <Text style={styles.estadoBadgeText}>{item.estado === 'encontrado' ? 'VISTO' : item.estado.toUpperCase()}</Text>
            </View>
 
            <Text style={styles.tituloDetail}>{item.nombre || 'Sin nombre'}</Text>
            <View style={styles.detailDivider} />
            <Text style={styles.descripcionDetail}>{item.descripcion}</Text>
 
-           <View style={styles.infoMetaBox}>
+           <View style={[styles.infoMetaBox, {marginTop: 15, marginBottom: 5}]}>
               <Text style={styles.metaTitle}>Detalles:</Text>
               <Text style={styles.metaText}>• Especie: {item.especie}</Text>
               <Text style={styles.metaText}>• Sexo: {item.sexo}</Text>
+           </View>
+
+           {/* BOTÓN GPS SI TIENE COORDENADAS */}
+           {item.coords && (
+             <TouchableOpacity
+               style={styles.mapBtn}
+               onPress={abrirMapaExterno}
+             >
+               <View style={styles.mapIconBg}>
+                 <Ionicons name="map" size={20} color="white" />
+               </View>
+               <View>
+                 <Text style={styles.mapBtnTitle}>Ver ubicación de la mascota</Text>
+                 <Text style={styles.mapBtnSub}>Abrir en Google Maps</Text>
+               </View>
+               <Ionicons name="chevron-forward" size={20} color="#CCC" style={{ marginLeft: 'auto' }} />
+             </TouchableOpacity>
+           )}
+
+           <View style={styles.infoInfoBox}>
+             <Ionicons name="information-circle-outline" size={20} color="#10B981" />
+             <Text style={styles.infoInfoText}>Merlo Conek facilita el contacto para ayudar a las mascotas. Sé responsable y cuidadoso en los encuentros.</Text>
            </View>
         </View>
         <View style={{ height: 100 }} />
@@ -135,7 +178,7 @@ export default function HuellitaDetalleScreen() {
         contenido={{
           id: item.id,
           tipo: 'huellita',
-          titulo: `${item.estado === 'perdido' ? '¡Perdido!' : 'Encontrado'} - ${item.nombre || item.especie}`,
+          titulo: `${item.estado === 'perdido' ? '¡Perdido!' : (item.estado === 'encontrado' ? '¡Visto!' : 'Mascota')} - ${item.nombre || item.especie}`,
           imagen: fotos[0] || null,
           subTitulo: `${item.barrio}`
         }}
@@ -170,7 +213,13 @@ const styles = StyleSheet.create({
   estadoBadgeText: { color: 'white', fontWeight: '900', fontSize: 12 },
   tituloDetail: { fontSize: 24, fontWeight: '900', color: '#111827', marginBottom: 10 },
   detailDivider: { height: 4, width: 40, backgroundColor: '#10B981', borderRadius: 2, marginBottom: 15 },
-  descripcionDetail: { fontSize: 16, color: '#374151', lineHeight: 24, marginBottom: 30 },
+  descripcionDetail: { fontSize: 16, color: '#374151', lineHeight: 24, marginBottom: 10 },
+  mapBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F9FAFB', padding: 15, borderRadius: 15, gap: 15, marginBottom: 20, borderWidth: 1, borderColor: '#EEE' },
+  mapIconBg: { width: 40, height: 40, borderRadius: 10, backgroundColor: '#10B981', justifyContent: 'center', alignItems: 'center' },
+  mapBtnTitle: { fontSize: 15, fontWeight: 'bold', color: '#111827' },
+  mapBtnSub: { fontSize: 12, color: '#6B7280' },
+  infoInfoBox: { flexDirection: 'row', backgroundColor: '#F0FDF4', padding: 15, borderRadius: 12, borderLeftWidth: 4, borderLeftColor: '#10B981', gap: 10, marginBottom: 20 },
+  infoInfoText: { flex: 1, fontSize: 13, color: '#065F46', lineHeight: 18, fontStyle: 'italic' },
   infoMetaBox: { backgroundColor: '#F9FAFB', padding: 15, borderRadius: 12, borderWidth: 1, borderColor: '#EEE' },
   metaTitle: { fontSize: 14, fontWeight: 'bold', color: '#111827', marginBottom: 5 },
   metaText: { fontSize: 14, color: '#4B5563', marginBottom: 2 },

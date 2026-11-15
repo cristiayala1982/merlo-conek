@@ -1,67 +1,69 @@
 import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
+import Constants from 'expo-constants';
 import { useEffect, useRef, useState } from 'react';
-import { Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
+import { useRouter } from 'expo-router';
 import { auth } from '../firebaseConfig';
 import { guardarPushToken } from '../services/firebase/notificationService';
-
-// Configuración de cómo se muestran las notificaciones cuando la app está abierta
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-  }),
-});
 
 export const usePushNotifications = () => {
   const [expoPushToken, setExpoPushToken] = useState('');
   const notificationListener = useRef();
   const responseListener = useRef();
+  const router = useRouter();
 
   useEffect(() => {
+    // 1. Obtener el token
     registerForPushNotificationsAsync().then(token => {
-      if (token) {
-        setExpoPushToken(token);
-        const uid = auth.currentUser?.uid;
-        if (uid) {
-          guardarPushToken(uid, token);
-        }
+      if (token) setExpoPushToken(token);
+    });
+
+    // 2. VIGILANTE: Registro y Limpieza
+    const unsubAuth = auth.onAuthStateChanged(async (user) => {
+      if (user) {
+        // Limpiamos notificaciones al entrar para mantener la barra limpia
+        Notifications.dismissAllNotificationsAsync();
+        let token = expoPushToken;
+        if (!token) token = await registerForPushNotificationsAsync();
+        if (token) await guardarPushToken(user.uid, token);
       }
     });
 
-    // Escuchar cuando llega una notificación mientras la app está abierta
-    notificationListener.current = Notifications.addNotificationReceivedListener(notification => {
-      console.log('Notificación recibida en primer plano:', notification);
+    // 3. LIMPIEZA AUTOMÁTICA: Cuando la app vuelve al primer plano
+    const appStateSub = AppState.addEventListener('change', (nextAppState) => {
+      if (nextAppState === 'active') {
+        Notifications.dismissAllNotificationsAsync();
+      }
     });
 
-    // Escuchar cuando el usuario toca la notificación
+    // 4. ESCUCHAR TOQUES (Manejo simple para evitar bucles)
     responseListener.current = Notifications.addNotificationResponseReceivedListener(response => {
-      console.log('Usuario tocó la notificación:', response);
-      // Aquí podrías manejar la navegación profunda (deep linking) al chat
+      // Dejamos que el sistema operativo maneje el Deep Link de Kotlin
+      // Solo nos encargamos de limpiar la barra aquí
+      Notifications.dismissAllNotificationsAsync();
     });
 
     return () => {
-      Notifications.removeNotificationSubscription(notificationListener.current);
-      Notifications.removeNotificationSubscription(responseListener.current);
+      if (unsubAuth) unsubAuth();
+      if (notificationListener.current) notificationListener.current.remove();
+      if (responseListener.current) responseListener.current.remove();
+      appStateSub.remove();
     };
-  }, []);
+  }, [expoPushToken]);
 
   return { expoPushToken };
 };
 
 async function registerForPushNotificationsAsync() {
   let token;
-
   if (Platform.OS === 'android') {
-    await Notifications.setNotificationChannelAsync('default', {
-      name: 'default',
+    await Notifications.setNotificationChannelAsync('chats', {
+      name: 'Mensajes de Chat',
       importance: Notifications.AndroidImportance.MAX,
-      vibrationPattern: [0, 250, 250, 250],
       lightColor: '#FF6600',
     });
   }
-
   if (Device.isDevice) {
     const { status: existingStatus } = await Notifications.getPermissionsAsync();
     let finalStatus = existingStatus;
@@ -69,22 +71,12 @@ async function registerForPushNotificationsAsync() {
       const { status } = await Notifications.requestPermissionsAsync();
       finalStatus = status;
     }
-    if (finalStatus !== 'granted') {
-      console.log('Permiso de notificaciones denegado');
-      return;
+    if (finalStatus === 'granted') {
+      try {
+        const projectId = Constants?.expoConfig?.extra?.eas?.projectId || Constants?.easConfig?.projectId;
+        token = (await Notifications.getExpoPushTokenAsync({ projectId })).data;
+      } catch (e) {}
     }
-
-    // Obtener el token de Expo
-    try {
-      token = (await Notifications.getExpoPushTokenAsync({
-        projectId: 'merloconekapp' // Puedes usar Constants.expoConfig.extra.eas.projectId si lo tienes configurado
-      })).data;
-    } catch (e) {
-      console.log('Error obteniendo token:', e);
-    }
-  } else {
-    console.log('Debes usar un dispositivo físico para notificaciones push');
   }
-
   return token;
 }

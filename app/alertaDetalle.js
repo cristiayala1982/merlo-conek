@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 
 import CardAlerta from '../components/alertas/CardAlerta';
+import ComentariosModal from '../components/home/ComentariosModal';
 import { auth, db } from '../firebaseConfig';
 import { obtenerPerfilUsuario } from '../services/firebaseService';
 
@@ -24,11 +25,16 @@ export default function AlertaDetalleScreen() {
   const [alerta, setAlerta] = useState(null);
   const [loading, setLoading] = useState(true);
   const [miPerfil, setMiPerfil] = useState(null);
+  const [mostrarComentarios, setMostrarComentarios] = useState(false);
 
   useEffect(() => {
     if (!postId) {
       setLoading(false);
       return;
+    }
+
+    if (abrirComentarios === 'true') {
+      setMostrarComentarios(true);
     }
 
     // ESCUCHA EN TIEMPO REAL DE LA ALERTA
@@ -56,7 +62,7 @@ export default function AlertaDetalleScreen() {
       unsubAlerta();
       unsubPerfil();
     };
-  }, [postId]);
+  }, [postId, abrirComentarios, commentId]);
 
   const volverAtras = () => {
     if (router.canGoBack()) {
@@ -98,8 +104,17 @@ export default function AlertaDetalleScreen() {
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         <CardAlerta
           item={alerta}
+          onComentarOverride={() => setMostrarComentarios(true)}
         />
       </ScrollView>
+
+      <ComentariosModal
+        visible={mostrarComentarios}
+        onClose={() => setMostrarComentarios(false)}
+        post={alerta}
+        targetCommentId={commentId}
+        collectionName="alertas_comunitarias"
+      />
     </View>
   );
 }

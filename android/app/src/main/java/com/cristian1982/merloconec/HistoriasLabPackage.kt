@@ -8,7 +8,10 @@ import com.facebook.react.uimanager.ViewManager
 class HistoriasLabPackage : ReactPackage {
 
     override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> {
-        return listOf(HistoriasLabModule(reactContext))
+        return listOf(
+            HistoriasLabModule(reactContext),
+            NotificationHistoryModule(reactContext)
+        )
     }
 
     override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<*, *>> {

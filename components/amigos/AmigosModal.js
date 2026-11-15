@@ -1,9 +1,110 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, FlatList, Image, Modal, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, FlatList, Image, Modal, StyleSheet, Text, TextInput, TouchableOpacity, View, DeviceEventEmitter, Alert } from 'react-native';
 import { auth } from '../../firebaseConfig';
-import { buscarUsuarios, dejarDeSeguirUsuario, obtenerPerfilUsuario, seguirUsuario } from '../../services/firebaseService';
+import { buscarUsuarios, dejarDeSeguirUsuario, obtenerPerfilUsuario, enviarSolicitudAmistad, aceptarSolicitudAmistad, rechazarSolicitudAmistad, escucharEstadoAmistad, lanzarDesafioEspontaneo } from '../../services/firebaseService';
+import { showToast } from '../utilidades/CustomToast';
+
+function FilaUsuario({ item, miPerfil, onNavigate, modoDesafio, onDesafioLanzado }) {
+  const [relacion, setRelacion] = useState(null);
+  const miUid = auth.currentUser?.uid;
+
+  useEffect(() => {
+    if (!item.id || !miUid) return;
+    const unsub = escucharEstadoAmistad(item.id, setRelacion);
+    return () => unsub();
+  }, [item.id, miUid]);
+
+  const handleAccion = async () => {
+    try {
+      if (modoDesafio) {
+        await lanzarDesafioEspontaneo(item.id);
+        onDesafioLanzado?.(item.nombre);
+        return;
+      }
+      if (!relacion) {
+        await enviarSolicitudAmistad(item.id);
+      } else if (relacion.status === 'aceptada') {
+        await dejarDeSeguirUsuario(item.id);
+      } else if (relacion.status === 'pendiente' && relacion.paraUid === miUid) {
+        await aceptarSolicitudAmistad(null, item.id);
+      }
+    } catch (e) {
+      console.log('Error en accion amigo:', e);
+    }
+  };
+
+  const handleRechazar = async () => {
+    try {
+      await rechazarSolicitudAmistad(null, item.id);
+    } catch (e) {
+      console.log('Error al rechazar:', e);
+    }
+  };
+
+  let btnText = "Agregar", btnIcon = "add", btnActive = false;
+  let showReject = false;
+
+  if (modoDesafio) {
+    btnText = "Desafiar"; btnIcon = "sparkles"; btnActive = false;
+  } else if (relacion) {
+    if (relacion.status === 'aceptada') {
+      btnText = "Amigo"; btnIcon = "checkmark"; btnActive = true;
+    } else if (relacion.status === 'pendiente') {
+      if (relacion.deUid === miUid) {
+        btnText = "Enviada"; btnIcon = "time-outline"; btnActive = true;
+      } else {
+        btnText = "Aceptar"; btnIcon = "person-add"; btnActive = false;
+        showReject = true; // Mostramos opción de rechazar
+      }
+    }
+  }
+
+  return (
+    <View style={styles.userCard}>
+      <TouchableOpacity style={styles.userInfo} onPress={() => onNavigate(item.id)}>
+        <Image
+          source={{ uri: item.fotoUrl || 'https://picsum.photos/100/100' }}
+          style={styles.avatar}
+        />
+        <View style={styles.textContainer}>
+          <Text style={styles.userName}>{item.nombre || 'Usuario'}</Text>
+          <Text style={styles.userBio} numberOfLines={1} ellipsizeMode="tail">
+            {item.bio || 'Sin biografía'}
+          </Text>
+        </View>
+      </TouchableOpacity>
+
+      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+        {showReject && (
+          <TouchableOpacity
+            style={styles.rejectBtn}
+            onPress={handleRechazar}
+          >
+            <Ionicons name="close" size={20} color="#6B7280" />
+          </TouchableOpacity>
+        )}
+
+        <TouchableOpacity
+          style={[styles.actionBtn, btnActive && styles.actionBtnActive]}
+          onPress={handleAccion}
+          disabled={btnText === "Enviada"}
+        >
+          <Ionicons
+            name={btnIcon}
+            size={18}
+            color={btnActive ? "#6B7280" : (modoDesafio ? "#FF6600" : "#FF6600")}
+            style={{ marginRight: 4 }}
+          />
+          <Text style={[styles.actionBtnTxt, btnActive && styles.actionBtnTxtActive, modoDesafio && { color: '#FF6600' }]}>
+            {btnText}
+          </Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
 
 export default function AmigosModal({ visible, onClose }) {
   const router = useRouter();
@@ -12,17 +113,31 @@ export default function AmigosModal({ visible, onClose }) {
   const [miPerfil, setPerfil] = useState(null);
   const [cargando, setCargando] = useState(true);
   const [tab, setTab] = useState('sugerencias'); // 'amigos' o 'sugerencias'
+  const [modoDesafio, setModoDesafio] = useState(false);
+
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener('SET_MODO_DESAFIO', (val) => {
+      setModoDesafio(val);
+      if (val) setTab('amigos'); // Por defecto a amigos si es desafío
+    });
+    return () => sub.remove();
+  }, []);
+
+  const handleDesafioCompletado = (nombre) => {
+    showToast(`¡Desafío enviado a ${nombre}!`, 'challenge');
+    onClose();
+  };
 
   useEffect(() => {
     const uid = auth.currentUser?.uid;
     if (!uid) return;
 
-    // 1. Escuchar mi propio perfil para saber a quién sigo
+    // 1. Escuchar mi propio perfil
     const unsubPerfil = obtenerPerfilUsuario(uid, (data) => {
       setPerfil(data);
     });
 
-    // 2. Buscar usuarios (sugerencias o búsqueda)
+    // 2. Buscar usuarios
     const unsubUsuarios = buscarUsuarios(busqueda, (lista) => {
       setUsuarios(lista);
       setCargando(false);
@@ -40,20 +155,8 @@ export default function AmigosModal({ visible, onClose }) {
 
   const listaFiltrada = usuarios.filter(u => {
     if (tab === 'amigos') return loSigo(u.id);
-    return true; // Sugerencias muestra todos (excepto yo, filtrado en el service)
+    return true;
   });
-
-  const handleSeguir = async (uid) => {
-    try {
-      if (loSigo(uid)) {
-        await dejarDeSeguirUsuario(uid);
-      } else {
-        await seguirUsuario(uid);
-      }
-    } catch (e) {
-      console.log('Error al seguir/dejar de seguir:', e);
-    }
-  };
 
   const irAPerfil = (uid) => {
     onClose();
@@ -64,36 +167,27 @@ export default function AmigosModal({ visible, onClose }) {
   };
 
   const renderUsuario = ({ item }) => (
-    <View style={styles.userCard}>
-      <TouchableOpacity style={styles.userInfo} onPress={() => irAPerfil(item.id)}>
-        <Image
-          source={{ uri: item.fotoUrl || 'https://picsum.photos/100/100' }}
-          style={styles.avatar}
-        />
-        <View>
-          <Text style={styles.userName}>{item.nombre || 'Usuario'}</Text>
-          <Text style={styles.userBio} numberOfLines={1}>{item.bio || 'Sin biografía'}</Text>
-        </View>
-      </TouchableOpacity>
-
-      <TouchableOpacity
-        style={[styles.actionBtn, loSigo(item.id) && styles.actionBtnActive]}
-        onPress={() => handleSeguir(item.id)}
-      >
-        <Text style={[styles.actionBtnTxt, loSigo(item.id) && styles.actionBtnTxtActive]}>
-          {loSigo(item.id) ? 'Siguiendo' : 'Seguir'}
-        </Text>
-      </TouchableOpacity>
-    </View>
+    <FilaUsuario
+      item={item}
+      miPerfil={miPerfil}
+      onNavigate={irAPerfil}
+      modoDesafio={modoDesafio}
+      onDesafioLanzado={handleDesafioCompletado}
+    />
   );
 
   return (
-    <Modal visible={visible} animationType="slide" transparent={false}>
+    <Modal
+      visible={visible}
+      animationType="slide"
+      transparent={false}
+      onRequestClose={() => { setModoDesafio(false); onClose(); }}
+    >
       <View style={styles.container}>
         {/* Cabecera */}
         <View style={styles.header}>
-          <Text style={styles.title}>Amigos</Text>
-          <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
+          <Text style={styles.title}>{modoDesafio ? 'Elegir amigo para desafiar' : 'Amigos'}</Text>
+          <TouchableOpacity onPress={() => { setModoDesafio(false); onClose(); }} style={styles.closeBtn}>
             <Ionicons name="close" size={28} color="#333" />
           </TouchableOpacity>
         </View>
@@ -110,20 +204,22 @@ export default function AmigosModal({ visible, onClose }) {
         </View>
 
         {/* Tabs */}
-        <View style={styles.tabs}>
-          <TouchableOpacity
-            style={[styles.tab, tab === 'sugerencias' && styles.tabActive]}
-            onPress={() => setTab('sugerencias')}
-          >
-            <Text style={[styles.tabTxt, tab === 'sugerencias' && styles.tabTxtActive]}>Sugerencias</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.tab, tab === 'amigos' && styles.tabActive]}
-            onPress={() => setTab('amigos')}
-          >
-            <Text style={[styles.tabTxt, tab === 'amigos' && styles.tabTxtActive]}>Mis Amigos</Text>
-          </TouchableOpacity>
-        </View>
+        {!modoDesafio && (
+          <View style={styles.tabs}>
+            <TouchableOpacity
+              style={[styles.tab, tab === 'sugerencias' && styles.tabActive]}
+              onPress={() => setTab('sugerencias')}
+            >
+              <Text style={[styles.tabTxt, tab === 'sugerencias' && styles.tabTxtActive]}>Sugerencias</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.tab, tab === 'amigos' && styles.tabActive]}
+              onPress={() => setTab('amigos')}
+            >
+              <Text style={[styles.tabTxt, tab === 'amigos' && styles.tabTxtActive]}>Mis Amigos</Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
         {cargando ? (
           <View style={styles.center}>
@@ -138,7 +234,7 @@ export default function AmigosModal({ visible, onClose }) {
             ListEmptyComponent={
               <View style={styles.emptyContainer}>
                 <Ionicons name="people-outline" size={60} color="#EEE" />
-                <Text style={styles.emptyTxt}>No se encontraron usuarios</Text>
+                <Text style={styles.emptyText}>No se encontraron usuarios</Text>
               </View>
             }
           />
@@ -196,19 +292,35 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#F9FAFB'
   },
-  userInfo: { flexDirection: 'row', alignItems: 'center', flex: 1 },
-  avatar: { width: 50, height: 50, borderRadius: 25, marginRight: 15, backgroundColor: '#EEE' },
+  userInfo: { flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 10 },
+  textContainer: { flex: 1 },
+  avatar: { width: 50, height: 50, borderRadius: 25, marginRight: 12, backgroundColor: '#EEE' },
   userName: { fontSize: 16, fontWeight: 'bold', color: '#111827' },
   userBio: { fontSize: 13, color: '#6B7280', marginTop: 2 },
   actionBtn: {
-    backgroundColor: '#FF6600',
-    paddingHorizontal: 15,
-    paddingVertical: 8,
-    borderRadius: 8
+    borderWidth: 1,
+    borderColor: '#FF6600',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    minWidth: 90,
+    justifyContent: 'center',
+    backgroundColor: 'transparent'
   },
-  actionBtnActive: { backgroundColor: '#F3F4F6' },
-  actionBtnTxt: { color: '#FFF', fontWeight: 'bold', fontSize: 13 },
-  actionBtnTxtActive: { color: '#374151' },
+  actionBtnActive: { borderColor: '#E5E7EB', backgroundColor: '#F9FAFB' },
+  actionBtnTxt: { color: '#FF6600', fontWeight: 'bold', fontSize: 13 },
+  actionBtnTxtActive: { color: '#6B7280' },
+  rejectBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#F3F4F6',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 8,
+  },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   emptyContainer: { alignItems: 'center', marginTop: 100 },
   emptyTxt: { color: '#9CA3AF', marginTop: 15, fontSize: 16 }

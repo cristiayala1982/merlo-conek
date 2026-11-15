@@ -2,9 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, Image, ActivityIndicator, StatusBar } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { HaloUserIcon } from '../../components/icons/HaloIcons';
 import { collection, query, where, orderBy, onSnapshot, doc, getDoc } from 'firebase/firestore';
 import { auth, db } from '../../firebaseConfig';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { obtenerPerfilUsuario } from '../../services/firebaseService';
 
 export default function MarketCalificaciones() {
   const router = useRouter();
@@ -13,11 +15,16 @@ export default function MarketCalificaciones() {
   const [calificaciones, setCalificaciones] = useState([]);
   const [loading, setLoading] = useState(true);
   const [usuario, setUsuario] = useState(null);
+  const [miPerfil, setMiPerfil] = useState(null);
 
   const targetId = userId || auth.currentUser?.uid;
 
   useEffect(() => {
     if (!targetId) return;
+
+    // Cargar mi perfil para la cabecera
+    const miUid = auth.currentUser?.uid;
+    if (miUid) obtenerPerfilUsuario(miUid, setMiPerfil);
 
     // Cargar info del usuario
     const fetchUser = async () => {
@@ -57,15 +64,28 @@ export default function MarketCalificaciones() {
   );
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
-      <StatusBar barStyle="dark-content" />
+    <View style={[styles.container, { paddingBottom: insets.bottom }]}>
+      <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
 
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-          <Ionicons name="arrow-back" size={26} color="#333" />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Calificaciones</Text>
-        <View style={{ width: 40 }} />
+      {/* HEADER RÁPIDO */}
+      <View style={[styles.navBar, { paddingTop: insets.top }]}>
+        <View style={styles.navContent}>
+          <TouchableOpacity onPress={() => router.replace('/(marketplace)')} style={styles.navIconBtn}>
+            <Ionicons name="home" size={28} color="#FF6600" />
+          </TouchableOpacity>
+
+          <Text style={styles.navTitle}>Calificaciones</Text>
+
+          <TouchableOpacity onPress={() => router.push('/(marketplace)/marketPerfil')} style={styles.navProfileBtn}>
+            {miPerfil?.fotoUrl ? (
+              <Image source={{ uri: miPerfil.fotoUrl }} style={styles.navAvatar} />
+            ) : (
+              <View style={[styles.navAvatar, { backgroundColor: '#374151', justifyContent: 'center', alignItems: 'center' }]}>
+                <HaloUserIcon size={18} color="#FFF" />
+              </View>
+            )}
+          </TouchableOpacity>
+        </View>
       </View>
 
       {loading ? (
@@ -101,6 +121,15 @@ export default function MarketCalificaciones() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#FFFFFF' },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  // ESTILOS NAV BAR RÁPIDA
+  navBar: { backgroundColor: 'white', borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
+  navContent: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', height: 60, paddingHorizontal: 15 },
+  navIconBtn: { padding: 5 },
+  navTitle: { fontSize: 17, fontWeight: '900', color: '#111827' },
+  navProfileBtn: { width: 36, height: 36, borderRadius: 18, overflow: 'hidden', borderWidth: 1.5, borderColor: '#FF6600', backgroundColor: '#F3F4F6' },
+  navAvatar: { width: '100%', height: '100%' },
+  navAvatarPlaceholder: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+
   header: {
     flexDirection: 'row',
     alignItems: 'center',

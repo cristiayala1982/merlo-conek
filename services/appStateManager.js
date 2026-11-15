@@ -7,7 +7,7 @@ import { AppState, DeviceEventEmitter } from 'react-native';
  */
 
 let lastBackgroundTime = null;
-const INACTIVITY_LIMIT = 5 * 60 * 1000; // 5 minutos en milisegundos
+const INACTIVITY_LIMIT = 3 * 60 * 1000; // 3 minutos en milisegundos
 
 export const initAppStateManager = () => {
   const subscription = AppState.addEventListener('change', nextAppState => {
@@ -23,10 +23,14 @@ export const initAppStateManager = () => {
       if (lastBackgroundTime) {
         const timeElapsed = Date.now() - lastBackgroundTime;
 
-        // Si pasaron más de 5 minutos, mandamos la orden de refrescar el Muro Social
+        // Si pasaron más de 5 minutos, mandamos la orden de refrescar las secciones principales
         if (timeElapsed > INACTIVITY_LIMIT) {
           console.log(`[AppStateManager] Pasaron ${Math.round(timeElapsed / 1000)}s. Disparando recarga inteligente.`);
           DeviceEventEmitter.emit('RELOAD_HOME_FEED');
+          DeviceEventEmitter.emit('RELOAD_MARKET');
+          DeviceEventEmitter.emit('RELOAD_HUELLITAS');
+          DeviceEventEmitter.emit('RELOAD_COMMUNITY');
+          DeviceEventEmitter.emit('RELOAD_CLASIFICADOS');
         } else {
           console.log(`[AppStateManager] Solo pasaron ${Math.round(timeElapsed / 1000)}s. Manteniendo persistencia.`);
         }

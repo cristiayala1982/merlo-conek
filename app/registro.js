@@ -3,6 +3,7 @@ import { createUserWithEmailAndPassword } from 'firebase/auth';
 import { doc, serverTimestamp, setDoc } from 'firebase/firestore';
 import { useState } from 'react';
 import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { auth, db } from '../firebaseConfig';
 
 export default function RegisterScreen() {
@@ -10,7 +11,9 @@ export default function RegisterScreen() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
-  
+
+  const [aceptaTerminos, setAceptaTerminos] = useState(false);
+
   const handleRegister = async () => {
     try {
       setLoading(true);
@@ -23,12 +26,24 @@ export default function RegisterScreen() {
       }
 
       const userCredential = await createUserWithEmailAndPassword(auth, cleanEmail, password);
+      const uid = userCredential.user.uid;
+      const defaultName = cleanEmail.split('@')[0] || 'Vecino';
 
-      await setDoc(doc(db, 'users', userCredential.user.uid), {
+      // Escribir perfil inicial correcto en la colección 'usuarios' (no 'users')
+      await setDoc(doc(db, 'usuarios', uid), {
+        nombre: defaultName,
         email: cleanEmail,
+        fotoUrl: null,
+        provincia: 'Buenos Aires',
+        partido: 'Merlo',
+        localidad: 'Merlo',
+        barrio: '',
+        bio: 'Vecino de Merlo Conektad@',
+        online: true,
+        siguiendo: [],
+        bloqueados: [],
         createdAt: serverTimestamp(),
       });
-
 
       setLoading(false);
       router.replace('/(tabs)/home'); 
@@ -38,11 +53,11 @@ export default function RegisterScreen() {
     }
   };
 
-  const canContinue = email.trim().length > 0 && password.length > 0 && !loading;
+  const canContinue = email.trim().length > 0 && password.length > 0 && aceptaTerminos && !loading;
 
   return (
     <KeyboardAvoidingView 
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       style={styles.container}
     >
       <StatusBar barStyle="dark-content" />
@@ -51,7 +66,9 @@ export default function RegisterScreen() {
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.logoContainer}>
-          <Text style={styles.brandName}>Merlo Conek</Text>
+          <Text style={styles.brandName}>
+            Merlo Cone<Text style={{ color: '#4B5563' }}>K</Text>tad@
+          </Text>
         </View>
 
         <Text style={styles.title}>Crea tu cuenta</Text>
@@ -83,7 +100,22 @@ export default function RegisterScreen() {
             <Text style={styles.togglePasswordText}>{showPassword ? 'Ocultar' : 'Mostrar'}</Text>
           </Pressable>
         </View>
-        
+
+        <TouchableOpacity
+          style={styles.checkboxContainer}
+          onPress={() => setAceptaTerminos(!aceptaTerminos)}
+          activeOpacity={0.8}
+        >
+          <Ionicons
+            name={aceptaTerminos ? "checkbox" : "square-outline"}
+            size={24}
+            color={aceptaTerminos ? "#FF6600" : "#9CA3AF"}
+          />
+          <Text style={styles.checkboxText}>
+            He leído y acepto los <Text style={styles.linkText} onPress={(e) => { e.stopPropagation(); router.push('/politica-privacidad'); }}>Términos de Uso y Privacidad</Text> de Merlo Conektad@.
+          </Text>
+        </TouchableOpacity>
+
         <Pressable 
           style={[styles.button, !canContinue && styles.buttonDisabled]} 
           disabled={!canContinue} 
@@ -112,9 +144,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
   },
   scrollContent: {
-    flexGrow: 1,
     padding: 30,
-    justifyContent: 'center',
+    paddingTop: 80,
+    paddingBottom: 380,
   },
   logoContainer: {
     alignItems: 'center',
@@ -169,8 +201,26 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
   },
+  checkboxContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+    marginTop: -5,
+    paddingRight: 20
+  },
+  checkboxText: {
+    marginLeft: 10,
+    fontSize: 14,
+    color: '#6B7280',
+    lineHeight: 20,
+    flex: 1
+  },
+  linkText: {
+    color: '#FF6600',
+    fontWeight: 'bold',
+  },
   button: {
-    marginTop: 20,
+    marginTop: 15,
     backgroundColor: '#FF6600',
     borderRadius: 16,
     paddingVertical: 18,

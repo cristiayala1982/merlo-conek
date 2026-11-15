@@ -5,8 +5,11 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.Outline
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.CountDownTimer
+import android.os.VibrationEffect
+import android.os.Vibrator
 import android.util.Log
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
@@ -74,22 +77,29 @@ class HistoriasActivity : AppCompatActivity() {
     private var estaGrabandoVideo = false
     private var temporizadorRegresivo: CountDownTimer? = null
     private var soloFotoMode = false
+    private var esEspontaneaMode = false
 
     private val selectorGaleriaLauncher = registerForActivityResult(
         ActivityResultContracts.PickVisualMedia()
     ) { uri: Uri? ->
         if (uri != null) {
-            if (esVideoMuyPesado(uri)) {
-                Toast.makeText(this, "Solo videos HD (720p) o menores.", Toast.LENGTH_LONG).show()
-            } else {
-                cameraExecutor.execute {
-                    val rutaLocal = copiarArchivoACache(uri)
-                    runOnUiThread {
-                        if (rutaLocal != null) {
-                            HistoriasLabModule.promesaCamara?.resolve(rutaLocal)
-                            HistoriasLabModule.promesaCamara = null
-                            finish()
-                        }
+            // Verificar duración si es un video
+            val tipoMime = contentResolver.getType(uri) ?: ""
+            if (tipoMime.startsWith("video/")) {
+                val duracion = obtenerDuracionVideo(uri)
+                if (duracion > 60000) { // Límite de 1 minuto (60.000 ms)
+                    Toast.makeText(this, "El video es demasiado largo (máx. 1 min)", Toast.LENGTH_LONG).show()
+                    return@registerForActivityResult
+                }
+            }
+
+            cameraExecutor.execute {
+                val rutaLocal = copiarArchivoACache(uri)
+                runOnUiThread {
+                    if (rutaLocal != null) {
+                        HistoriasLabModule.promesaCamara?.resolve(rutaLocal)
+                        HistoriasLabModule.promesaCamara = null
+                        finish()
                     }
                 }
             }
@@ -102,9 +112,12 @@ class HistoriasActivity : AppCompatActivity() {
         setContentView(R.layout.activity_historias)
 
         soloFotoMode = intent.getBooleanExtra("soloFoto", false)
+        esEspontaneaMode = intent.getBooleanExtra("esEspontanea", false)
 
         if (soloFotoMode) {
             findViewById<TextView>(R.id.txtInstruccion).text = "Toca para tomar foto de perfil"
+        } else if (esEspontaneaMode) {
+            findViewById<TextView>(R.id.txtInstruccion).text = "Espontánea ⚡ (Fotos o vídeo máx. 15s)"
         }
 
         viewFinder = findViewById(R.id.viewFinder)
@@ -116,6 +129,10 @@ class HistoriasActivity : AppCompatActivity() {
         btnVoltearCamara = findViewById(R.id.btnVoltearCamara)
         btnFlash = findViewById(R.id.btnFlash)
         btnGaleria = findViewById(R.id.btnGaleria)
+
+        if (esEspontaneaMode) {
+            btnGaleria.visibility = View.GONE
+        }
 
         val outlineRedondo = object : ViewOutlineProvider() {
             override fun getOutline(view: View, outline: Outline) {
@@ -263,6 +280,19 @@ class HistoriasActivity : AppCompatActivity() {
 
     private fun takePhoto() {
         val imageCapture = imageCapture ?: return
+
+        try {
+            val vibrator = getSystemService(VIBRATOR_SERVICE) as Vibrator
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                vibrator.vibrate(VibrationEffect.createOneShot(50, VibrationEffect.DEFAULT_AMPLITUDE))
+            } else {
+                @Suppress("DEPRECATION")
+                vibrator.vibrate(50)
+            }
+        } catch (e: Exception) {
+            Log.e("HistoriasActivity", "Error al vibrar: ${e.message}")
+        }
+
         val name = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(System.currentTimeMillis())
         val photoFile = File(cacheDir, "$name.jpg")
         val outputOptions = ImageCapture.OutputFileOptions.Builder(photoFile).build()
@@ -313,10 +343,12 @@ class HistoriasActivity : AppCompatActivity() {
                         cancelarCuentaRegresiva()
                         if (!recordEvent.hasError()) {
                             val pathCompleto = videoFile.absolutePath
+                            Log.d("CONEK_LOG", "🎥 [CAMARA] Grabación finalizada. Guardado en disco: $pathCompleto")
                             HistoriasLabModule.promesaCamara?.resolve(pathCompleto)
                             HistoriasLabModule.promesaCamara = null
                             finish()
                         } else {
+                            Log.e("CONEK_LOG", "❌ [CAMARA] Error en grabación: ${recordEvent.error}")
                             cleanupRecording()
                             HistoriasLabModule.promesaCamara?.reject("ERROR_VIDEO", "Error código: ${recordEvent.error}")
                         }
@@ -326,11 +358,12 @@ class HistoriasActivity : AppCompatActivity() {
     }
 
     private fun iniciarCuentaRegresiva() {
+        val tiempoMaxMs: Long = if (esEspontaneaMode) 15000L else 30000L
         txtTiempoGrabar.setTextColor(ContextCompat.getColor(this, android.R.color.white))
-        txtTiempoGrabar.text = "01:00"
+        txtTiempoGrabar.text = if (esEspontaneaMode) "00:15" else "00:30"
         contenedorContador.visibility = View.VISIBLE
 
-        temporizadorRegresivo = object : CountDownTimer(60000, 1000) {
+        temporizadorRegresivo = object : CountDownTimer(tiempoMaxMs, 1000) {
             override fun onTick(millisUntilFinished: Long) {
                 val segundosTotales = (millisUntilFinished / 1000).toInt()
                 val minutos = segundosTotales / 60
@@ -401,6 +434,19 @@ class HistoriasActivity : AppCompatActivity() {
         }
     }
 
+    private fun obtenerDuracionVideo(uri: Uri): Long {
+        return try {
+            val retriever = MediaMetadataRetriever()
+            retriever.setDataSource(this, uri)
+            val time = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+            retriever.release()
+            time?.toLong() ?: 0
+        } catch (e: Exception) {
+            Log.e("HistoriasActivity", "Error al obtener duración del video", e)
+            0
+        }
+    }
+
     private fun esVideoMuyPesado(uri: Uri): Boolean {
         return try {
             val retriever = MediaMetadataRetriever()
@@ -415,8 +461,35 @@ class HistoriasActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        cancelarCuentaRegresiva()
-        cameraExecutor.shutdown()
+        
+        // 1. Limpieza agresiva de recursos nativos
+        try {
+            cancelarCuentaRegresiva()
+            
+            // Detenemos cualquier grabación activa
+            activeRecording?.stop()
+            activeRecording?.close()
+            activeRecording = null
+            
+            // Liberamos el motor de la cámara
+            val cameraProvider = ProcessCameraProvider.getInstance(this).get()
+            cameraProvider.unbindAll()
+            
+            // Apagamos el ejecutor de hilos
+            cameraExecutor.shutdownNow()
+            
+            // Anulamos referencias para ayudar al recolector de basura (GC)
+            camera = null
+            imageCapture = null
+            videoCapture = null
+            
+            // Pedimos liberación de memoria inmediata
+            System.gc()
+            Runtime.getRuntime().gc()
+            
+        } catch (e: Exception) {
+            Log.e("HistoriasActivity", "Error en limpieza final", e)
+        }
     }
 
     override fun onRequestPermissionsResult(

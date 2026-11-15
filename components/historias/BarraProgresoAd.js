@@ -1,12 +1,11 @@
 import React, { useEffect, useRef } from 'react';
-import { StyleSheet, View, Animated } from 'react-native';
+import { StyleSheet, View, Animated, Dimensions } from 'react-native';
+
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 /**
- * BarraProgresoAd - Componente independiente para el tiempo de los anuncios
- * @param {boolean} activa - Si el progreso debe estar corriendo
- * @param {boolean} pausada - Si el usuario tiene el dedo apoyado (pausa)
- * @param {number} duracion - Tiempo en ms (por defecto 5000ms)
- * @param {function} alFinalizar - Función a ejecutar cuando termina el tiempo
+ * BarraProgresoAd - Versión con Reseteo por Montaje (Key Refresh)
+ * Confía en que el padre la destruye y crea de nuevo para reiniciar.
  */
 export default function BarraProgresoAd({
   activa = true,
@@ -19,25 +18,22 @@ export default function BarraProgresoAd({
   const animacionRef = useRef(null);
 
   useEffect(() => {
-    if (!activa) {
-      progreso.setValue(0);
-      progresoAcumulado.current = 0;
-      return;
-    }
+    // Si no está activa (por ejemplo, mientras carga la página), no hacemos nada
+    if (!activa) return;
 
     if (pausada) {
-      // Si se pausa, detenemos la animación y guardamos por donde iba
+      // Si se pausa, frenamos la animación y guardamos el valor actual
       progreso.stopAnimation((v) => {
         progresoAcumulado.current = v;
       });
     } else {
-      // Si se activa o reanuda, lanzamos la animación desde donde quedó
+      // Calculamos cuánto tiempo le falta según lo que ya avanzó
       const tiempoRestante = duracion * (1 - progresoAcumulado.current);
 
       animacionRef.current = Animated.timing(progreso, {
         toValue: 1,
         duration: tiempoRestante,
-        useNativeDriver: false, // Necesario para animar width/flex
+        useNativeDriver: true, // GPU activada para fluidez total
       });
 
       animacionRef.current.start(({ finished }) => {
@@ -47,22 +43,25 @@ export default function BarraProgresoAd({
       });
     }
 
+    // Al desmontarse (cuando cambiamos de página), detenemos todo
     return () => {
       if (animacionRef.current) animacionRef.current.stop();
     };
   }, [activa, pausada, duracion]);
 
+  // Estilo de transformación para escalado desde el centro simulando Instagram
+  const transformStyle = {
+    transform: [
+      { translateX: -SCREEN_WIDTH / 2 },
+      { scaleX: progreso },
+      { translateX: SCREEN_WIDTH / 2 }
+    ]
+  };
+
   return (
     <View style={styles.container}>
       <View style={styles.fondoBarra}>
-        <Animated.View
-          style={[
-            styles.progresoBarra,
-            {
-              flex: progreso // Usamos el valor animado para llenar el ancho
-            }
-          ]}
-        />
+        <Animated.View style={[styles.progresoBarra, transformStyle]} />
       </View>
     </View>
   );
@@ -72,10 +71,10 @@ const styles = StyleSheet.create({
   container: {
     width: '92%',
     height: 3,
-    flexDirection: 'row',
     alignSelf: 'center',
     marginTop: 5,
     marginBottom: 5,
+    overflow: 'hidden',
   },
   fondoBarra: {
     flex: 1,
@@ -83,9 +82,9 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 255, 255, 0.3)',
     borderRadius: 2,
     overflow: 'hidden',
-    flexDirection: 'row',
   },
   progresoBarra: {
+    width: '100%',
     height: '100%',
     backgroundColor: '#FFFFFF',
     borderRadius: 2,

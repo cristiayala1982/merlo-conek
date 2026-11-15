@@ -1,143 +1,131 @@
-// todo vista previa de foto/video con botones de publicar/descartar + STICKER MOVIL
+// Vista previa simplificada: Solo Giro y Texto
 import { Ionicons } from '@expo/vector-icons';
-import { useEffect, useRef } from 'react';
-import { Animated, Dimensions, Image, PanResponder, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-// 💥 CLAVE: Importamos los componentes del nuevo expo-video
+import * as ImageManipulator from 'expo-image-manipulator';
 import { useVideoPlayer, VideoView } from 'expo-video';
+import { useState } from 'react';
+import { ActivityIndicator, Dimensions, Image, Keyboard, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, TouchableOpacity, TouchableWithoutFeedback, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const LOG_TAG = '[CAMERA_FLOW]';
-const debugLog = (...args) => {
-  if (__DEV__) {
-    console.log(LOG_TAG, ...args);
-  }
-};
 
-export default function VistaPrevia({ archivo, onDescartar, onPublicar }) {
+export default function VistaPrevia({ archivo, onDescartar, onPublicar, replyData }) {
+  const insets = useSafeAreaInsets();
+  const [textoHistoria, setTextoHistoria] = useState('');
+  const [currentUri, setCurrentUri] = useState(archivo?.uri || null);
+  const [editando, setEditando] = useState(false);
+
   const tipo = archivo?.tipo || null;
-  const uri = archivo?.uri || null;
   const esVideo = tipo === 'video';
 
-  // 🖐️ CONFIGURACIÓN DEL STICKER MOVIBLE
-  // Guardamos la posición X e Y del sticker usando una variable animada
-  const posicionSticker = useRef(new Animated.ValueXY({ x: 120, y: 200 })).current;
-
-  // Creamos el detector de gestos (PanResponder)
-  const panResponder = useRef(
-    PanResponder.create({
-      // Activamos el toque apenas el usuario apoya el dedo en el sticker
-      onStartShouldSetPanResponder: () => true,
-
-      // Mientras arrastra el dedo, actualizamos la posición en tiempo real
-      onPanResponderMove: Animated.event(
-        [null, { dx: posicionSticker.x, dy: posicionSticker.y }],
-        { useNativeDriver: false } // False porque manejamos layout físico
-      ),
-
-      // Cuando levanta el dedo, el sticker se queda fijo en el último lugar
-      onPanResponderRelease: () => {
-        posicionSticker.extractOffset(); // Fija los valores acumulados para que no vuelva al inicio
-      },
-    })
-  ).current;
-
-  // 🎬 Inicializamos el reproductor moderno de expo-video si es un video
-  const player = useVideoPlayer(esVideo && !!uri ? uri : null, (playerInstance) => {
-    playerInstance.loop = true;      // Activa el bucle infinito
-    playerInstance.muted = false;     // Desmutear para escuchar el audio de la historia
-    playerInstance.play();           // Arranca automáticamente
-    debugLog('VistaPrevia player listo y play lanzado', { esVideo, uri });
+  const player = useVideoPlayer(esVideo && !!currentUri ? currentUri : null, (playerInstance) => {
+    playerInstance.loop = true;
+    playerInstance.play();
   });
 
-  useEffect(() => {
-    debugLog('VistaPrevia mounted');
-    return () => {
-      debugLog('VistaPrevia unmounted');
-    };
-  }, []);
-
-  useEffect(() => {
-    debugLog('VistaPrevia cambio de archivo:', archivo ? `${tipo} ${uri}` : 'null');
-  }, [archivo, tipo, uri]);
+  const handleRotate = async () => {
+    if (tipo !== 'foto' || editando) return;
+    try {
+      setEditando(true);
+      const result = await ImageManipulator.manipulateAsync(
+        currentUri,
+        [{ rotate: 90 }],
+        { compress: 1, format: ImageManipulator.SaveFormat.JPEG }
+      );
+      setCurrentUri(result.uri);
+    } catch (e) {
+      console.log(e);
+    } finally {
+      setEditando(false);
+    }
+  };
 
   if (!archivo) return null;
 
   return (
-    <View style={styles.container}>
-      {/* Si es foto muestra imagen, si no, reproduce el video en bucle */}
-      {tipo === 'foto' ? (
-        <Image source={{ uri: uri }} style={StyleSheet.absoluteFill} resizeMode="cover" />
-      ) : (
-        /* 🎬 Usamos el nuevo VideoView de expo-video */
-        <VideoView
-          player={player}
-          style={StyleSheet.absoluteFill}
-          contentFit="cover"         // Reemplaza a resizeMode
-          nativeControls={false}     // Oculta la botonera nativa
-        />
-      )}
+    <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+      <View style={styles.container}>
 
-      {/* 👾 STICKER INTERACTIVO (Mover con el dedo) */}
-      <Animated.View
-        {...panResponder.panHandlers} // Le inyectamos los sensores de movimiento
-        style={[
-          posicionSticker.getLayout(), // Le pasa la posición dinámica de X e Y
-          styles.stickerContenedor
-        ]}
-      >
-        {/* Acá metí un emoji de fuego, pero puede ser cualquier imagen o sticker */}
-        <Text style={styles.stickerTexto}>🔥</Text>
-      </Animated.View>
+        {/* Fondo Blur */}
+        {tipo === 'foto' && (
+          <Image source={{ uri: currentUri }} style={StyleSheet.absoluteFill} blurRadius={20} opacity={0.5} />
+        )}
 
-      {/* Botonera flotante inferior */}
-      <View style={styles.contenedorBotones}>
-        <TouchableOpacity style={styles.botonAccion} onPress={onDescartar}>
-          <Ionicons name="close-circle" size={55} color="#FF3B30" />
-          <Text style={styles.textoBoton}>Descartar</Text>
-        </TouchableOpacity>
+        {/* Visualizador */}
+        <View style={styles.viewerContainer}>
+          {tipo === 'foto' ? (
+            <Image
+              source={{ uri: currentUri }}
+              style={StyleSheet.absoluteFill}
+              contentFit="contain"
+            />
+          ) : (
+            <VideoView player={player} style={StyleSheet.absoluteFill} contentFit="contain" nativeControls={false} />
+          )}
+        </View>
 
-        <TouchableOpacity
-          style={styles.botonAccion}
-          onPress={() => {
-            debugLog('VistaPrevia boton publicar presionado');
-            onPublicar?.();
-          }}
+        {editando && (
+          <View style={styles.loaderEdit}>
+            <ActivityIndicator color="#FF6600" size="large" />
+          </View>
+        )}
+
+        {/* Botón Rotar (Solo fotos) */}
+        {tipo === 'foto' && !editando && (
+          <TouchableOpacity style={[styles.rotateBtn, { top: insets.top + 20 }]} onPress={handleRotate}>
+            <Ionicons name="reload" size={28} color="white" />
+            <Text style={styles.rotateTxt}>Girar</Text>
+          </TouchableOpacity>
+        )}
+
+        {/* Input de Texto */}
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.inputContainer}
+          keyboardVerticalOffset={Platform.OS === 'android' ? 100 : 0}
         >
-          <Ionicons name="checkmark-circle" size={55} color="#34C759" />
-          <Text style={styles.textoBoton}>Publicar</Text>
-        </TouchableOpacity>
+          <View style={styles.textoWrapper}>
+            <TextInput
+              style={styles.inputTexto}
+              placeholder="Escribe un mensaje..."
+              placeholderTextColor="rgba(255,255,255,0.6)"
+              value={textoHistoria}
+              onChangeText={setTextoHistoria}
+              multiline
+              maxLength={150}
+            />
+          </View>
+        </KeyboardAvoidingView>
+
+        {/* Botonera Inferior */}
+        <View style={[styles.contenedorBotones, { bottom: insets.bottom + 40 }]}>
+          <TouchableOpacity style={styles.botonAccion} onPress={onDescartar}>
+            <Ionicons name="close-circle" size={60} color="#FF3B30" />
+            <Text style={styles.textoBoton}>Descartar</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.botonAccion}
+            onPress={() => onPublicar?.(textoHistoria, currentUri)}
+          >
+            <Ionicons name="checkmark-circle" size={60} color="#34C759" />
+            <Text style={styles.textoBoton}>Aceptar</Text>
+          </TouchableOpacity>
+        </View>
       </View>
-    </View>
+    </TouchableWithoutFeedback>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
-  
-  // Estilos del sticker flotante
-  stickerContenedor: {
-    position: 'absolute',
-    padding: 10,
-    zIndex: 99, // Arriba del video obligatoriamente
-    cursor: 'pointer',
-  },
-  stickerTexto: {
-    fontSize: 75, // Bien grande estilo historia de Instagram
-    textShadowColor: 'rgba(0, 0, 0, 0.4)',
-    textShadowOffset: { width: 1, height: 3 },
-    textShadowRadius: 5,
-  },
-
-  contenedorBotones: {
-    position: 'absolute',
-    bottom: 50,
-    flexDirection: 'row',
-    width: SCREEN_WIDTH,
-    justifyContent: 'space-around',
-    alignItems: 'center',
-    paddingHorizontal: 40,
-    zIndex: 10,
-  },
+  viewerContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  loaderEdit: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', zIndex: 500 },
+  rotateBtn: { position: 'absolute', right: 20, alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.5)', padding: 12, borderRadius: 15, borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)' },
+  rotateTxt: { color: 'white', fontSize: 10, marginTop: 4, fontWeight: 'bold' },
+  inputContainer: { position: 'absolute', bottom: '45%', left: 30, right: 30, zIndex: 200 },
+  textoWrapper: { backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 25, paddingHorizontal: 15, paddingVertical: 10, borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)' },
+  inputTexto: { color: 'white', fontSize: 18, fontWeight: '700', textAlign: 'center', minHeight: 40 },
+  contenedorBotones: { position: 'absolute', flexDirection: 'row', width: '100%', justifyContent: 'space-around', alignItems: 'center', paddingHorizontal: 40, zIndex: 10 },
   botonAccion: { alignItems: 'center' },
   textoBoton: { color: 'white', fontWeight: 'bold', fontSize: 13, marginTop: 5, textShadowColor: 'black', textShadowRadius: 3 }
 });

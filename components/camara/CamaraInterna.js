@@ -1,96 +1,173 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { StyleSheet, View, Text, TouchableOpacity, SafeAreaProvider, SafeAreaView, Dimensions, Alert, Image } from 'react-native';
-import { Camera, useCameraDevice } from 'react-native-vision-camera';
 import { Ionicons } from '@expo/vector-icons';
-
-const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
+import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
+import { useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, StyleSheet, Text, TouchableOpacity, View, Vibration } from 'react-native';
+import { Camera, useCameraDevice, useCameraPermission, usePhotoOutput } from 'react-native-vision-camera';
 
 /**
- * Componente de cámara integrada de alto rendimiento usando react-native-vision-camera.
- * Funciona completamente dentro de la aplicación para evitar cierres por falta de RAM en dispositivos de gama baja.
- *
- * @param {boolean} visible Controla la visibilidad de la cámara desde el padre.
- * @param {function} onCerrar Función que se ejecuta al cancelar o cerrar la cámara.
- * @param {function} onFotoCapturada Función que devuelve el URI local de la foto tomada.
+ * Camara interna para capturar una foto y devolver su URI local al componente padre.
  */
 export default function CamaraInterna({ visible, onCerrar, onFotoCapturada }) {
-  const [hasPermission, setHasPermission] = useState(false);
+  const { hasPermission, requestPermission } = useCameraPermission();
   const [isActive, setIsActive] = useState(false);
-  const [cameraPosition, setCameraPosition] = useState('back'); // 'back' o 'front'
-  const [flash, setFlash] = useState('off'); // 'off' o 'on'
-  const [photoPreview, setPhotoPreview] = useState(null);
-
+  const [cameraPosition, setCameraPosition] = useState('back');
+  const [flash, setFlash] = useState('off');
+  const [zoomFactor, setZoomFactor] = useState(1);
+  const [isCapturing, setIsCapturing] = useState(false);
+  const [isSelectingGallery, setIsSelectingGallery] = useState(false);
+  const [isPreparingGallery, setIsPreparingGallery] = useState(false);
+  const [galleryLoadingText, setGalleryLoadingText] = useState('');
   const cameraRef = useRef(null);
   const device = useCameraDevice(cameraPosition);
 
-  // Solicitar permisos al montar o al hacerse visible
+  const photoOutput = usePhotoOutput({
+    maxPhotoQualityPrioritization: 'balanced',
+  });
+
   useEffect(() => {
     if (visible) {
       setIsActive(true);
-      (async () => {
-        const status = await Camera.getCameraPermissionStatus();
-        if (status === 'granted') {
-          setHasPermission(true);
-        } else {
-          const requestStatus = await Camera.requestCameraPermission();
-          setHasPermission(requestStatus === 'granted');
-        }
-      })();
+      if (!hasPermission) requestPermission();
     } else {
       setIsActive(false);
-      setPhotoPreview(null);
     }
-  }, [visible]);
+  }, [visible, hasPermission]);
+
+  useEffect(() => {
+    if (!visible) return undefined;
+
+    const zoomInterval = setInterval(() => {
+      const factor = cameraRef.current?.controller?.displayableZoomFactor;
+      if (typeof factor === 'number') setZoomFactor(factor);
+    }, 100);
+
+    return () => clearInterval(zoomInterval);
+  }, [visible, cameraPosition]);
 
   if (!visible) return null;
 
-  // Manejar el cambio de flash
   const toggleFlash = () => {
-    setFlash((current) => (current === 'off' ? 'on' : 'off'));
+    if (cameraPosition !== 'back') return;
+
+    setFlash((current) => {
+      if (current === 'off') return 'auto';
+      if (current === 'auto') return 'on';
+      return 'off';
+    });
   };
 
-  // Alternar entre cámara trasera y delantera
   const toggleCameraPosition = () => {
     setCameraPosition((current) => (current === 'back' ? 'front' : 'back'));
+    setFlash('off');
+    setZoomFactor(1);
   };
 
-  // Capturar la fotografía
-  const tomarFoto = async () => {
-    if (cameraRef.current == null) return;
+  const cambiarZoom = (direction) => {
+    const controller = cameraRef.current?.controller;
+    if (!controller) return;
+
+    const zoomStep = (controller.maxZoom - controller.minZoom) * 0.2;
+    const nextZoom = Math.max(
+      controller.minZoom,
+      Math.min(controller.maxZoom, controller.zoom + zoomStep * direction)
+    );
+
+    cameraRef.current.startZoomAnimation(nextZoom, 3);
+  };
+
+  const abrirGaleria = async () => {
+    if (isSelectingGallery || isCapturing) return;
+
+    setIsSelectingGallery(true);
+    setIsPreparingGallery(true);
+    setGalleryLoadingText('Espere, abriendo galería...');
+    setIsActive(false);
 
     try {
-      const file = await cameraRef.current.takePhoto({
-        flash: flash,
-        enableShutterSound: true,
-        qualityPrioritization: 'balanced', // Balance perfecto entre velocidad y RAM
-        skipMetadata: true, // Ahorra memoria omitiendo datos adicionales de la foto
+      // Dar tiempo a que el mensaje se pinte antes de abrir el selector nativo.
+      await new Promise((resolve) => setTimeout(resolve, 180));
+      setIsPreparingGallery(false);
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: false,
+        quality: 0.7,
       });
 
-      // El URI viene en formato de archivo local de react-native-vision-camera (ruta nativa)
-      // Agregamos el prefijo file:// si no lo tiene, para compatibilidad con React Native Image
-      const formattedUri = file.path.startsWith('file://') ? file.path : `file://${file.path}`;
-      setPhotoPreview(formattedUri);
+      if (!result.canceled && result.assets?.[0]?.uri) {
+        setIsPreparingGallery(true);
+        setGalleryLoadingText('Cargando imagen...');
+        setIsActive(true);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+
+        let finalUri = result.assets[0].uri;
+        try {
+          const manip = await ImageManipulator.manipulateAsync(
+            finalUri,
+            [{ resize: { width: 1080 } }],
+            { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG }
+          );
+          if (manip?.uri) finalUri = manip.uri;
+        } catch (e) {}
+
+        onFotoCapturada(finalUri);
+        setTimeout(() => setIsPreparingGallery(false), 800);
+      } else {
+        setIsActive(true);
+        setIsPreparingGallery(false);
+        setGalleryLoadingText('');
+      }
     } catch (error) {
-      console.error("Error al capturar foto:", error);
-      Alert.alert("Error", "No se pudo tomar la foto. Intenta de nuevo.");
+      console.error('Error al abrir la galería:', error);
+      setIsActive(true);
+      setIsPreparingGallery(false);
+      setGalleryLoadingText('');
+      Alert.alert('Error', 'No se pudo abrir la galería. Intenta de nuevo.');
+    } finally {
+      setIsSelectingGallery(false);
     }
   };
 
-  // Confirmar y enviar la foto tomada al componente padre
-  const confirmarFoto = () => {
-    if (photoPreview) {
-      onFotoCapturada(photoPreview);
-      setPhotoPreview(null);
-      onCerrar();
+  const tomarFoto = async () => {
+    if (photoOutput == null || isCapturing) return;
+
+    setIsCapturing(true);
+    Vibration.vibrate(50); // Feedback háptico de confirmación estilo WhatsApp
+    try {
+      const photo = await photoOutput.capturePhoto(
+        {
+          flashMode: cameraPosition === 'back' ? flash : 'off',
+          enableShutterSound: false
+        },
+        {}
+      );
+      const filePath = await photo.saveToTemporaryFileAsync();
+      const formattedUri = filePath.startsWith('file://') ? filePath : `file://${filePath}`;
+
+      // Normalizar rotación EXIF de inmediato para que en Samsung A54 y similares la vista previa salga vertical
+      let finalUri = formattedUri;
+      try {
+        const manip = await ImageManipulator.manipulateAsync(
+          formattedUri,
+          [{ resize: { width: 1080 } }],
+          { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG }
+        );
+        if (manip?.uri) finalUri = manip.uri;
+      } catch (errManip) {
+        console.log('Error normalizando rotación EXIF en foto:', errManip);
+      }
+
+      onFotoCapturada(finalUri);
+      photo.dispose?.();
+    } catch (error) {
+      console.error('Error al capturar foto:', error);
+      Alert.alert('Error', 'No se pudo tomar la foto. Intenta de nuevo.');
+    } finally {
+      setIsCapturing(false);
     }
   };
 
-  // Descartar la foto de vista previa para tomar otra
-  const descartarFoto = () => {
-    setPhotoPreview(null);
-  };
-
-  // Si no hay permisos concedidos
   if (!hasPermission) {
     return (
       <View style={styles.centerContainer}>
@@ -103,7 +180,6 @@ export default function CamaraInterna({ visible, onCerrar, onFotoCapturada }) {
     );
   }
 
-  // Si no encuentra el lente o sensor de cámara adecuado
   if (device == null) {
     return (
       <View style={styles.centerContainer}>
@@ -118,92 +194,96 @@ export default function CamaraInterna({ visible, onCerrar, onFotoCapturada }) {
 
   return (
     <View style={styles.container}>
-      {photoPreview ? (
-        // --- VISTA PREVIA DE LA FOTO TOMADA ---
-        <View style={styles.previewContainer}>
-          <Image source={{ uri: photoPreview }} style={styles.previewImage} resizeMode="cover" />
+      <Camera
+        ref={cameraRef}
+        style={StyleSheet.absoluteFill}
+        device={device}
+        isActive={isActive}
+        implementationMode="compatible"
+        enableNativeZoomGesture
+        outputs={[photoOutput]}
+      />
 
-          <View style={styles.previewControls}>
-            <TouchableOpacity style={styles.previewBtnDiscard} onPress={descartarFoto}>
-              <Ionicons name="close-circle" size={32} color="white" />
-              <Text style={styles.previewBtnTxt}>Repetir</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.previewBtnConfirm} onPress={confirmarFoto}>
-              <Ionicons name="checkmark-circle" size={54} color="#10B981" />
-              <Text style={[styles.previewBtnTxt, { fontWeight: 'bold' }]}>Aceptar</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      ) : (
-        // --- VISTA DE CÁMARA EN VIVO ---
-        <View style={styles.cameraWrapper}>
-          <Camera
-            ref={cameraRef}
-            style={StyleSheet.absoluteFill}
-            device={device}
-            isActive={isActive}
-            photo={true}
-          />
-
-          {/* Botones de Control Superpuestos (Arriba) */}
-          <View style={styles.topControls}>
-            <TouchableOpacity style={styles.iconButton} onPress={onCerrar}>
-              <Ionicons name="arrow-back" size={28} color="white" />
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.iconButton} onPress={toggleFlash}>
-              <Ionicons
-                name={flash === 'on' ? "flash" : "flash-off"}
-                size={26}
-                color={flash === 'on' ? "#FBBF24" : "white"}
-              />
-            </TouchableOpacity>
-          </View>
-
-          {/* Barra de Controles Inferior (Disparador y Rotar) */}
-          <View style={styles.bottomControls}>
-            <View style={styles.flexItem} />
-
-            {/* Botón Disparador Principal */}
-            <TouchableOpacity style={styles.shutterOuter} onPress={tomarFoto} activeOpacity={0.7}>
-              <View style={styles.shutterInner} />
-            </TouchableOpacity>
-
-            {/* Botón Rotar Cámara */}
-            <View style={[styles.flexItem, { alignItems: 'center' }]}>
-              <TouchableOpacity style={styles.rotateButton} onPress={toggleCameraPosition}>
-                <Ionicons name="camera-reverse" size={28} color="white" />
-              </TouchableOpacity>
-            </View>
+      {isPreparingGallery && (
+        <View style={styles.galleryLoadingOverlay} pointerEvents="none">
+          <View style={styles.galleryLoadingContent}>
+            <ActivityIndicator color="white" size="large" />
+            <Text style={styles.galleryLoadingText}>{galleryLoadingText}</Text>
           </View>
         </View>
       )}
+
+      <TouchableOpacity
+        style={[styles.sideButton, styles.flashButton, styles.flashTopButton, cameraPosition !== 'back' && styles.sideButtonDisabled]}
+        onPress={toggleFlash}
+        disabled={cameraPosition !== 'back'}
+      >
+        <Ionicons
+          name={flash === 'off' ? 'flash-off' : 'flash'}
+          size={24}
+          color={flash === 'off' ? 'white' : '#FBBF24'}
+        />
+        <Text style={styles.flashLabel}>
+          {flash === 'auto' ? 'Auto' : flash === 'on' ? 'On' : 'Off'}
+        </Text>
+      </TouchableOpacity>
+
+      <View style={styles.zoomIndicator} pointerEvents="none">
+        <Text style={styles.zoomIndicatorText}>{zoomFactor.toFixed(1)}x</Text>
+      </View>
+
+      <View style={styles.zoomControls}>
+        <TouchableOpacity style={styles.sideButton} onPress={() => cambiarZoom(-1)}>
+          <Ionicons name="remove" size={24} color="white" />
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.sideButton} onPress={() => cambiarZoom(1)}>
+          <Ionicons name="add" size={24} color="white" />
+        </TouchableOpacity>
+      </View>
+
+      <View style={styles.controls} pointerEvents="box-none">
+        <View style={styles.controlsRow}>
+          <View style={styles.sideSlot}>
+            <TouchableOpacity
+              style={[styles.sideButton, isSelectingGallery && styles.sideButtonDisabled]}
+              onPress={abrirGaleria}
+              disabled={isSelectingGallery}
+            >
+              <Ionicons name="images" size={25} color="white" />
+            </TouchableOpacity>
+          </View>
+
+          <TouchableOpacity
+            style={[styles.shutterOuter, isCapturing && styles.shutterDisabled]}
+            onPress={tomarFoto}
+            activeOpacity={0.7}
+            disabled={isCapturing}
+          >
+            <View style={styles.shutterInner} />
+          </TouchableOpacity>
+
+          <View style={styles.sideSlot}>
+            <TouchableOpacity style={styles.sideButton} onPress={toggleCameraPosition}>
+              <Ionicons name="camera-reverse" size={28} color="white" />
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
+    flex: 1,
     backgroundColor: 'black',
-    zIndex: 99999, // Superponerse a cualquier modal y pantalla
   },
   centerContainer: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
+    flex: 1,
     backgroundColor: '#111827',
     justifyContent: 'center',
     alignItems: 'center',
     padding: 30,
-    zIndex: 99999,
   },
   errorText: {
     color: 'white',
@@ -224,34 +304,99 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     fontSize: 15,
   },
-  cameraWrapper: {
-    flex: 1,
-    justifyContent: 'space-between',
-  },
-  topControls: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingTop: 50, // Espacio para la barra de estado de Android
-  },
-  iconButton: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+  controls: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: 230,
     justifyContent: 'center',
     alignItems: 'center',
+    zIndex: 10,
+    elevation: 10,
   },
-  bottomControls: {
+  controlsRow: {
+    width: '100%',
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 30,
-    paddingBottom: 40,
-    backgroundColor: 'rgba(0, 0, 0, 0.2)',
   },
-  flexItem: {
-    flex: 1,
+  sideSlot: {
+    width: 76,
+    alignItems: 'center',
+  },
+  flashTopButton: {
+    position: 'absolute',
+    top: 50,
+    right: 20,
+    zIndex: 20,
+    elevation: 20,
+  },
+  flashButton: {
+    width: 64,
+    height: 58,
+    borderRadius: 29,
+  },
+  flashLabel: {
+    color: 'white',
+    fontSize: 10,
+    fontWeight: 'bold',
+    marginTop: -2,
+  },
+  zoomIndicator: {
+    position: 'absolute',
+    top: 115,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    zIndex: 20,
+  },
+  zoomIndicatorText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: 'bold',
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  zoomControls: {
+    position: 'absolute',
+    right: 20,
+    top: 115,
+    gap: 10,
+    zIndex: 20,
+    elevation: 20,
+  },
+  sideButton: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  sideButtonDisabled: {
+    opacity: 0.45,
+  },
+  galleryLoadingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0, 0, 0, 0.55)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 100,
+    elevation: 100,
+  },
+  galleryLoadingContent: {
+    transform: [{ translateY: 250 }],
+    alignItems: 'center',
+  },
+  galleryLoadingText: {
+    color: 'white',
+    fontSize: 15,
+    fontWeight: '600',
+    marginTop: 12,
   },
   shutterOuter: {
     width: 76,
@@ -259,58 +404,17 @@ const styles = StyleSheet.create({
     borderRadius: 38,
     borderWidth: 4,
     borderColor: 'white',
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
     justifyContent: 'center',
     alignItems: 'center',
-    alignSelf: 'center',
+  },
+  shutterDisabled: {
+    opacity: 0.55,
   },
   shutterInner: {
     width: 60,
     height: 60,
     borderRadius: 30,
     backgroundColor: 'white',
-  },
-  rotateButton: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  previewContainer: {
-    flex: 1,
-    backgroundColor: 'black',
-    justifyContent: 'space-between',
-  },
-  previewImage: {
-    flex: 1,
-    width: screenWidth,
-    height: screenHeight,
-  },
-  previewControls: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    alignItems: 'center',
-    paddingBottom: 40,
-    paddingTop: 20,
-    backgroundColor: 'rgba(0, 0, 0, 0.6)',
-  },
-  previewBtnDiscard: {
-    alignItems: 'center',
-  },
-  previewBtnConfirm: {
-    alignItems: 'center',
-  },
-  previewBtnTxt: {
-    color: 'white',
-    fontSize: 14,
-    marginTop: 5,
-    textShadowColor: 'rgba(0, 0, 0, 0.7)',
-    textShadowOffset: { width: 1, height: 1 },
-    textShadowRadius: 3,
   },
 });

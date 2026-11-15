@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Modal, View, Text, StyleSheet, FlatList, TouchableOpacity, Image, ActivityIndicator, Pressable } from 'react-native';
+import { Modal, View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, Pressable } from 'react-native';
+import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { db } from '../../firebaseConfig';
 import { doc, getDoc } from 'firebase/firestore';
@@ -70,6 +71,8 @@ export default function DetalleVistas({ visible, onClose, story }) {
                     <Image
                       source={{ uri: item.foto || 'https://picsum.photos/100' }}
                       style={styles.avatar}
+                      contentFit="cover"
+                      cachePolicy="memory-disk"
                     />
                     {item.reaccion === 'like' && (
                       <View style={styles.heartBadge}>

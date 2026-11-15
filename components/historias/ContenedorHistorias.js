@@ -1,75 +1,147 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system/legacy';
+import * as ImageManipulator from 'expo-image-manipulator';
 import * as VideoThumbnails from 'expo-video-thumbnails';
-import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, Image, Modal, NativeModules, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useRouter, usePathname, useGlobalSearchParams } from 'expo-router';
+import { useEffect, useMemo, useState, useCallback } from 'react';
+import { ActivityIndicator, Alert, DeviceEventEmitter, FlatList, Modal, NativeModules, Platform, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Image } from 'expo-image';
 import { getVideoMetaData } from 'react-native-compressor';
-import { auth } from '../../firebaseConfig';
-import { escucharHistoriasCirculos, subirHistoriaAFirebase } from '../../services/firebaseService';
+import { auth, db } from '../../firebaseConfig';
+import { eliminarHistoriaAFirebase, escucharHistoriasCirculos, obtenerHistoriasGrupales, obtenerPerfilUsuario, subirHistoriaAFirebase } from '../../services/firebaseService';
+import { setStoriesCache } from '../../services/storiesState';
 import { comprimirVideoPro } from '../camara/compresor3';
 import VistaPrevia from '../camara/VistaPrevia';
 
-const nombreUsuario = (uid) => {
-  if (!uid) return 'Usuario';
-  return `@${String(uid).slice(0, 6)}`;
-};
-
 export default function ContenedorHistorias() {
+  const router = useRouter();
   const [historias, setHistorias] = useState([]);
   const [archivoCapturado, setArchivoCapturado] = useState(null);
   const [estaSubiendo, setEstaSubiendo] = useState(false);
+  const [optimizandoVideo, setOptimizandoVideo] = useState(false);
   const [progresoMsg, setProgresoMsg] = useState('');
   const [progresoPct, setProgresoPct] = useState(0);
+  const [eliminandoHistoriaId, setEliminandoHistoriaId] = useState(null);
+  const [gestorVisible, setGestorVisible] = useState(false);
+  const [cargandoMisHistorias, setCargandoMisHistorias] = useState(false);
+  const [misHistoriasDetalle, setMisHistoriasDetalle] = useState([]);
+  const [miPerfil, setMiPerfil] = useState(null);
 
   const miUid = auth.currentUser?.uid || null;
 
   useEffect(() => {
-    const unsub = escucharHistoriasCirculos(
-      (items) => setHistorias(items),
-      (error) => console.log('Error escuchando historias:', error?.message || error)
-    );
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
+    const unsub = obtenerPerfilUsuario(uid, (data) => setMiPerfil(data));
     return () => unsub();
   }, []);
 
-  const miHistoria = useMemo(
-    () => historias.find((historia) => historia?.userId === miUid) || null,
-    [historias, miUid]
-  );
+  useEffect(() => {
+    const unsub = escucharHistoriasCirculos(
+      async (items) => {
+        setHistorias(items);
+        items.forEach(h => {
+          const uri = h.thumbnailUrl || h.url;
+          if (uri) Image.prefetch(uri);
+        });
+        if (items.length > 0 && miUid) {
+          const uidsEnHistorias = items.map(h => h.userId).filter(Boolean);
+          // Ponemos miUid al principio de la lista de IDs
+          const uids = Array.from(new Set([miUid, ...uidsEnHistorias]));
+          let dataCompleta = await obtenerHistoriasGrupales(uids, miUid);
 
-  const otrasHistorias = useMemo(
-    () => historias.filter((historia) => historia?.userId && historia.userId !== miUid),
-    [historias, miUid]
-  );
+          // ORDEN CRÍTICO: Forzamos que mi historia sea SIEMPRE la primera (índice 0)
+          dataCompleta.sort((a, b) => {
+            if (a.userId === miUid) return -1;
+            if (b.userId === miUid) return 1;
+            return 0;
+          });
+
+          setStoriesCache(dataCompleta);
+        }
+      },
+      (error) => {}
+    );
+
+    const deleteSub = DeviceEventEmitter.addListener('onDeleteStory', async (data) => {
+      if (data.storyId) {
+        try { await eliminarHistoriaAFirebase({ id: data.storyId }); } catch (e) { console.log(e); }
+      }
+    });
+
+    return () => {
+      unsub();
+      deleteSub.remove();
+    };
+  }, []);
+
+  const miHistoria = useMemo(() => historias.find((h) => h?.userId === miUid) || null, [historias, miUid]);
+  const otrasHistorias = useMemo(() => historias.filter((h) => h?.userId && h.userId !== miUid), [historias, miUid]);
 
   const abrirCamaraHistoria = async () => {
-    if (!miUid) {
-      Alert.alert('Inicia sesion', 'Debes iniciar sesion para publicar tu historia.');
-      return;
-    }
-
+    if (!miUid) return;
     try {
-      if (Platform.OS !== 'android') {
-        Alert.alert('Camara nativa', 'La camara Kotlin esta disponible por ahora solo en Android.');
-        return;
-      }
-
+      if (Platform.OS !== 'android') return;
       const modulo = NativeModules.HistoriasLabNative;
-      if (!modulo || typeof modulo.abrirCamaraHistorias !== 'function') {
-        Alert.alert('Camara no disponible', 'No se encontro el modulo nativo HistoriasLabNative.');
-        return;
+      if (!modulo) return;
+      const ruta = await modulo.abrirCamaraHistorias(false, false);
+      if (!ruta) return;
+
+      const esVideo = String(ruta).endsWith('.mp4');
+      const uriOriginal = `file://${ruta}`;
+      let capturaTemp = { tipo: esVideo ? 'video' : 'foto', uri: uriOriginal, optimizado: false };
+
+      if (esVideo) {
+        try {
+          setOptimizandoVideo(true);
+          DeviceEventEmitter.emit('SET_STORY_BUSY', true); // BLOQUEAMOS NAVBAR
+          setProgresoMsg('Optimizando video...');
+          const uriComprimida = await comprimirVideoPro(uriOriginal);
+          if (uriComprimida) {
+            capturaTemp.uri = uriComprimida;
+            capturaTemp.optimizado = true;
+          }
+        } catch (e) {
+          console.log("Error optimizando historia:", e);
+        } finally {
+          setOptimizandoVideo(false);
+          DeviceEventEmitter.emit('SET_STORY_BUSY', false); // DESBLOQUEAMOS NAVBAR
+          setProgresoMsg('');
+        }
       }
 
-      const rutaCrudaAndroid = await modulo.abrirCamaraHistorias(false);
-      if (!rutaCrudaAndroid) return;
-
-      const esVideo = String(rutaCrudaAndroid).endsWith('.mp4');
-      setArchivoCapturado({
-        tipo: esVideo ? 'video' : 'foto',
-        uri: `file://${rutaCrudaAndroid}`,
-      });
+      setArchivoCapturado(capturaTemp);
     } catch (error) {
-      console.log('Camara nativa cancelada o fallo:', error?.message || error);
+      console.log(error);
+      setOptimizandoVideo(false);
     }
+  };
+
+  const pathname = usePathname();
+  const globalParams = useGlobalSearchParams();
+
+  const verHistorias = (userId) => {
+    if (!userId) return;
+    const h = historias.find(item => item.userId === userId);
+    const thumbRapido = h?.thumbnailLqUrl || h?.thumbnailUrl || h?.url || "";
+
+    // Cerramos el modal de la Navbar antes de irnos para limpiar la UI
+    DeviceEventEmitter.emit('CLOSE_NAV_PANELS');
+
+    // Construimos la ruta de retorno incluyendo el userId si estamos en un perfil ajeno
+    let rutaConParams = pathname;
+    if (pathname.includes('perfilAjeno') && globalParams.userId) {
+      rutaConParams = `${pathname}?userId=${globalParams.userId}`;
+    }
+
+    router.push({
+      pathname: '/historias-viewer',
+      params: {
+        userId,
+        thumbRapido,
+        retornoRuta: rutaConParams // Guardamos dónde estábamos con sus parámetros
+      }
+    });
   };
 
   const generarMiniatura = async (videoUri) => {
@@ -78,92 +150,183 @@ export default function ContenedorHistorias() {
       try {
         const { uri } = await VideoThumbnails.getThumbnailAsync(videoUri, { time });
         if (uri) return uri;
-      } catch (error) {
-        console.log('Fallo miniatura historia:', error?.message || error);
-      }
+      } catch (error) {}
     }
     return null;
   };
 
-  const handlePublicarHistoria = async () => {
-    if (estaSubiendo || !archivoCapturado) return;
+  const generarMiniaturaFoto = async (fotoUri) => {
+    try {
+      const result = await ImageManipulator.manipulateAsync(fotoUri, [{ resize: { width: 540 } }], { compress: 0.35, format: ImageManipulator.SaveFormat.JPEG });
+      return result?.uri || null;
+    } catch (error) { return null; }
+  };
 
-    const captura = archivoCapturado;
+  const generarMiniaturaUltraLQ = async (fotoUri) => {
+    try {
+      const result = await ImageManipulator.manipulateAsync(fotoUri, [{ resize: { width: 150 } }], { compress: 0.1, format: ImageManipulator.SaveFormat.JPEG });
+      return result?.uri || null;
+    } catch (error) { return null; }
+  };
+
+  const comprimirImagenPrincipal = async (fotoUri) => {
+    try {
+      const result = await ImageManipulator.manipulateAsync(fotoUri, [{ resize: { width: 1080 } }], { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG });
+      return result?.uri || null;
+    } catch (error) { return null; }
+  };
+
+  const renderItem = useCallback(({ item }) => {
+    if (item.isMe) {
+      let miHistoriaVista = true;
+      if (miHistoria?.createdAt && miPerfil?.lastStoriesCheck) {
+        const lastStoryTime = miHistoria.createdAt.seconds ? miHistoria.createdAt.seconds * 1000 : miHistoria.createdAt;
+        const myCheckTime = miPerfil.lastStoriesCheck.seconds ? miPerfil.lastStoriesCheck.seconds * 1000 : miPerfil.lastStoriesCheck;
+        if (lastStoryTime > myCheckTime) miHistoriaVista = false;
+      } else if (miHistoria && !miPerfil?.lastStoriesCheck) {
+        miHistoriaVista = false;
+      }
+
+      return (
+        <View style={styles.item}>
+          <Pressable style={styles.avatarWrap} onPress={() => miHistoria && verHistorias(miUid)} onLongPress={() => setGestorVisible(true)}>
+            <View style={[styles.avatar, miHistoria ? (miHistoriaVista ? styles.avatarVisto : styles.avatarConHistoria) : styles.avatarPropiaSinHistoria]}>
+              {miPerfil?.fotoUrl ? (
+                <Image
+                    source={{ uri: miPerfil.fotoUrl }}
+                    style={styles.innerMedia}
+                    contentFit="cover"
+                    cachePolicy="memory-disk"
+                />
+              ) : (
+                <View style={[styles.innerCircle, styles.innerCirclePropia]}>
+                  <Text style={styles.inicialTxt}>{String(miPerfil?.nombre || 'T').slice(0, 1).toUpperCase()}</Text>
+                </View>
+              )}
+            </View>
+            <TouchableOpacity style={styles.plusBadge} onPress={() => abrirCamaraHistoria()}>
+              <Ionicons name="add" size={14} color="#FFFFFF" />
+            </TouchableOpacity>
+          </Pressable>
+          <Text style={[styles.nombre, miHistoria && miHistoriaVista && styles.nombreVisto]}>Tu historia</Text>
+        </View>
+      );
+    }
+
+    let historiaVista = true;
+    const checkPersonal = miPerfil?.vistasHistorias?.[item.userId];
+    if (item.createdAt) {
+      const lastStoryTime = item.createdAt.seconds ? item.createdAt.seconds * 1000 : item.createdAt;
+      if (checkPersonal) {
+        const personalTime = checkPersonal.seconds ? checkPersonal.seconds * 1000 : checkPersonal;
+        if (lastStoryTime > personalTime) historiaVista = false;
+      } else {
+        if (miPerfil?.lastStoriesCheck) {
+          const globalTime = miPerfil.lastStoriesCheck.seconds ? miPerfil.lastStoriesCheck.seconds * 1000 : miPerfil.lastStoriesCheck;
+          if (lastStoryTime > globalTime) historiaVista = false;
+        } else {
+          historiaVista = false;
+        }
+      }
+    }
+
+    return (
+      <TouchableOpacity style={styles.item} onPress={() => verHistorias(item.userId)}>
+        <View style={[styles.avatar, styles.avatarOtro, historiaVista && styles.avatarVisto]}>
+          {item?.userPhotoUrl ? (
+            <Image
+                source={{ uri: item.userPhotoUrl }}
+                style={styles.innerMedia}
+                contentFit="cover"
+                cachePolicy="memory-disk"
+            />
+          ) : (
+            <View style={styles.innerCircle}>
+              <Text style={styles.inicialTxt}>{String(item?.userName || 'U').slice(0, 1).toUpperCase()}</Text>
+            </View>
+          )}
+        </View>
+        <Text style={[styles.nombre, historiaVista && styles.nombreVisto]} numberOfLines={1}>{item.userName || 'Usuario'}</Text>
+      </TouchableOpacity>
+    );
+  }, [miHistoria, miPerfil, miUid, historias]);
+
+  const handlePublicarHistoria = async (texto = '', uriEditada = null) => {
+    if (estaSubiendo || !archivoCapturado) return;
+    const captura = { ...archivoCapturado };
+    if (uriEditada) captura.uri = uriEditada;
 
     try {
       setArchivoCapturado(null);
       setEstaSubiendo(true);
+      DeviceEventEmitter.emit('SET_STORY_BUSY', true); // BLOQUEAMOS NAVBAR
       setProgresoMsg('Preparando historia...');
       setProgresoPct(0);
-
       await new Promise((resolve) => setTimeout(resolve, 120));
-
-      let uriParaSubir = captura.uri;
-      let thumbnailUri = null;
-      let duracionMs = null;
-      let width = null;
-      let height = null;
+      let uriParaSubir = captura.uri; let thumbnailUri = null; let thumbnailLqUri = null; let duracionMs = null; let width = null; let height = null;
       const temporalesParaLimpiar = [];
 
-      if (captura.tipo === 'video') {
-        setProgresoMsg('Generando miniatura...');
-        thumbnailUri = await generarMiniatura(captura.uri);
-        if (thumbnailUri) temporalesParaLimpiar.push(thumbnailUri);
+      // LOG INICIAL
+      console.log("📸 [HISTORIAS] Iniciando proceso de publicación. Tipo:", captura.tipo);
 
-        setProgresoMsg('Comprimiendo video...');
-        uriParaSubir = await comprimirVideoPro(captura.uri);
-        if (uriParaSubir && uriParaSubir !== captura.uri) {
+      if (captura.tipo === 'video') {
+        setProgresoMsg('Generando miniatura...'); thumbnailUri = await generarMiniatura(captura.uri); if (thumbnailUri) temporalesParaLimpiar.push(thumbnailUri);
+
+        if (!captura.optimizado) {
+          console.log("🎥 [VIDEO] Iniciando compresión de video...");
+          setProgresoMsg('Comprimiendo video...'); uriParaSubir = await comprimirVideoPro(captura.uri); if (uriParaSubir && uriParaSubir !== captura.uri) temporalesParaLimpiar.push(uriParaSubir);
+        } else {
           temporalesParaLimpiar.push(uriParaSubir);
         }
 
-        if (!thumbnailUri && uriParaSubir) {
-          setProgresoMsg('Regenerando miniatura...');
-          thumbnailUri = await generarMiniatura(uriParaSubir);
-          if (thumbnailUri) temporalesParaLimpiar.push(thumbnailUri);
-        }
+        if (!thumbnailUri && uriParaSubir) { setProgresoMsg('Regenerando miniatura...'); thumbnailUri = await generarMiniatura(uriParaSubir); if (thumbnailUri) temporalesParaLimpiar.push(thumbnailUri); }
+        const meta = await getVideoMetaData(uriParaSubir); duracionMs = meta?.duration ? Math.round(Number(meta.duration) * 1000) : null; width = meta?.width ? Number(meta.width) : null; height = meta?.height ? Number(meta.height) : null;
+      } else {
+        console.log("🖼️ [IMAGEN] Iniciando optimización de foto...");
+        setProgresoMsg('Optimizando imagen...');
 
-        const meta = await getVideoMetaData(uriParaSubir);
-        duracionMs = meta?.duration ? Math.round(Number(meta.duration) * 1000) : null;
-        width = meta?.width ? Number(meta.width) : null;
-        height = meta?.height ? Number(meta.height) : null;
+        // Tamaño original para log
+        const infoOriginal = await FileSystem.getInfoAsync(captura.uri);
+        const sizeOriginalMB = (infoOriginal.size / (1024 * 1024)).toFixed(2);
+        console.log(`📏 [IMAGEN] Tamaño original: ${sizeOriginalMB} MB`);
+
+        // 1. Comprimir para el círculo de la lista
+        thumbnailUri = await generarMiniaturaFoto(captura.uri);
+        if (thumbnailUri) temporalesParaLimpiar.push(thumbnailUri);
+
+        // 2. Crear Placeholder instantáneo
+        thumbnailLqUri = await generarMiniaturaUltraLQ(captura.uri);
+        if (thumbnailLqUri) temporalesParaLimpiar.push(thumbnailLqUri);
+
+        // 3. Comprimir imagen principal
+        const principalComprimida = await comprimirImagenPrincipal(captura.uri);
+        if (principalComprimida) {
+            uriParaSubir = principalComprimida;
+            temporalesParaLimpiar.push(principalComprimida);
+
+            const infoComprimida = await FileSystem.getInfoAsync(principalComprimida);
+            const sizeComprimidaKB = (infoComprimida.size / 1024).toFixed(2);
+            const ahorro = (((infoOriginal.size - infoComprimida.size) / infoOriginal.size) * 100).toFixed(1);
+            console.log(`✅ [IMAGEN] Optimización completa: ${sizeComprimidaKB} KB (Ahorro: ${ahorro}%)`);
+        }
       }
 
       const infoArchivo = await FileSystem.getInfoAsync(uriParaSubir, { size: true });
       const fileSizeBytes = infoArchivo?.exists ? infoArchivo.size ?? null : null;
-
       setProgresoMsg('Subiendo historia...');
+
       await subirHistoriaAFirebase({
-        uri: uriParaSubir,
-        tipo: captura.tipo,
-        thumbnailUri,
-        fileSizeBytes,
-        duracionMs,
-        width,
-        height,
+        uri: uriParaSubir, tipo: captura.tipo, thumbnailUri, thumbnailLqUri, texto: typeof texto === 'string' ? texto.trim() : '', fileSizeBytes, duracionMs, width, height,
         onProgress: ({ fase, progreso }) => {
-          const pct = Math.max(1, Math.min(100, Number(progreso) || 0));
-          setProgresoPct(pct);
-          if (fase === 'subiendo-media') {
-            setProgresoMsg(`Subiendo archivo... ${pct}%`);
-          } else if (fase === 'subiendo-thumbnail') {
-            setProgresoMsg(`Subiendo miniatura... ${pct}%`);
-          } else if (fase === 'completado') {
-            setProgresoMsg('Historia publicada 100%');
-          }
+          const pct = Math.round(Math.max(1, Math.min(100, Number(progreso) || 0))); setProgresoPct(pct);
+          if (fase === 'subiendo-media' || fase === 'subiendo-thumbnail') setProgresoMsg(`Subiendo historia...`);
+          else if (fase === 'completado') setProgresoMsg('Historia publicada');
         },
       });
-
-      for (const ruta of temporalesParaLimpiar) {
-        try {
-          await FileSystem.deleteAsync(ruta, { idempotent: true });
-        } catch (error) {
-          console.log('No se pudo limpiar temporal historia:', error?.message || error);
-        }
-      }
-    } catch (error) {
-      Alert.alert('Error', error?.message || 'No se pudo subir la historia.');
-    } finally {
+      for (const ruta of temporalesParaLimpiar) { try { await FileSystem.deleteAsync(ruta, { idempotent: true }); } catch (error) {} }
+    } catch (error) { Alert.alert('Error', error?.message || 'No se pudo subir la historia.'); } finally {
       setEstaSubiendo(false);
+      DeviceEventEmitter.emit('SET_STORY_BUSY', false); // DESBLOQUEAMOS NAVBAR
       setProgresoMsg('');
       setProgresoPct(0);
     }
@@ -171,184 +334,75 @@ export default function ContenedorHistorias() {
 
   return (
     <View style={styles.wrapper}>
-      <ScrollView
+      <FlatList
+        data={[{ isMe: true }, ...otrasHistorias]}
+        renderItem={renderItem}
+        keyExtractor={(item, index) => item.userId || item.id || `h-${index}`}
         horizontal
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.lista}
-      >
-        <View style={styles.item}>
-          <View style={styles.avatarWrap}>
-            <View style={[styles.avatar, miHistoria ? styles.avatarConHistoria : styles.avatarPropiaSinHistoria]}>
-              {miHistoria?.thumbnailUrl || miHistoria?.url ? (
-                <Image
-                  source={{ uri: miHistoria.thumbnailUrl || miHistoria.url }}
-                  style={styles.innerMedia}
-                />
-              ) : (
-                <View style={[styles.innerCircle, styles.innerCirclePropia]} />
-              )}
-            </View>
-
-            <Pressable style={styles.plusBadge} onPress={abrirCamaraHistoria}>
-              <Ionicons name="add" size={14} color="#FFFFFF" />
-            </Pressable>
-          </View>
-          <Text style={styles.nombre}>Tu historia</Text>
-        </View>
-
-        {otrasHistorias.map((historia) => (
-          <View key={historia.id || historia.historiaId || historia.userId} style={styles.item}>
-            <View style={[styles.avatar, styles.avatarOtro]}>
-              {historia?.thumbnailUrl || historia?.url ? (
-                <Image
-                  source={{ uri: historia.thumbnailUrl || historia.url }}
-                  style={styles.innerMedia}
-                />
-              ) : (
-                <View style={styles.innerCircle}>
-                  <Text style={styles.inicialTxt}>{String(nombreUsuario(historia?.userId || '')).slice(1, 2).toUpperCase()}</Text>
-                </View>
-              )}
-            </View>
-            <Text style={styles.nombre}>{nombreUsuario(historia.userId)}</Text>
-          </View>
-        ))}
-      </ScrollView>
-
+        decelerationRate="fast"
+        snapToInterval={114}
+        snapToAlignment="start"
+      />
       {estaSubiendo && (
         <View style={styles.progresoWrap}>
           <ActivityIndicator size="small" color="#F97316" />
           <View style={styles.progresoTextWrap}>
-            <Text style={styles.progresoText}>{progresoMsg || 'Subiendo historia...'}</Text>
+            <Text style={styles.progresoText}>{progresoMsg}</Text>
             <Text style={styles.progresoPct}>{progresoPct}%</Text>
           </View>
         </View>
       )}
 
+      {optimizandoVideo && (
+        <View style={styles.optimizandoOverlay}>
+           <ActivityIndicator size="large" color="#F97316" />
+           <Text style={styles.optimizandoTxt}>Optimizando video...</Text>
+        </View>
+      )}
+
       <Modal visible={!!archivoCapturado} animationType="slide">
-        {archivoCapturado ? (
-          <VistaPrevia
-            archivo={archivoCapturado}
-            onDescartar={() => setArchivoCapturado(null)}
-            onPublicar={handlePublicarHistoria}
-          />
-        ) : null}
+        {archivoCapturado && <VistaPrevia archivo={archivoCapturado} onDescartar={() => setArchivoCapturado(null)} onPublicar={handlePublicarHistoria} />}
+      </Modal>
+      <Modal visible={gestorVisible} transparent animationType="fade" onRequestClose={() => setGestorVisible(false)}>
+        <Pressable style={styles.gestorOverlay} onPress={() => setGestorVisible(false)}>
+          <View style={styles.gestorCard}>
+             <Text style={styles.gestorTitulo}>Gestor de historias</Text>
+             <TouchableOpacity style={{marginTop: 20, padding: 10, backgroundColor: '#F97316', borderRadius: 8}} onPress={() => setGestorVisible(false)}>
+                <Text style={{color: 'white', textAlign: 'center'}}>Cerrar</Text>
+             </TouchableOpacity>
+          </View>
+        </Pressable>
       </Modal>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  wrapper: {
-    width: '100%',
-    backgroundColor: '#FFFFFF',
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E7EB',
-    paddingTop: 14,
-    paddingBottom: 14,
-    paddingHorizontal: 12,
-    shadowColor: '#000000',
-    shadowOpacity: 0.05,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 3,
-  },
-  lista: {
-    gap: 8,
-    paddingRight: 6,
-  },
-  item: {
-    alignItems: 'center',
-    width: 94,
-  },
-  avatarWrap: {
-    position: 'relative',
-    width: 88,
-    height: 88,
-    marginBottom: 6,
-  },
-  avatar: {
-    width: 88,
-    height: 88,
-    borderRadius: 44,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 4,
-    borderColor: '#FB923C',
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'hidden',
-  },
-  avatarConHistoria: {
-    borderColor: '#F97316',
-  },
-  avatarPropiaSinHistoria: {
-    borderColor: '#9CA3AF',
-  },
-  avatarOtro: {
-    marginBottom: 6,
-    borderColor: '#A855F7',
-  },
-  innerCircle: {
-    width: 68,
-    height: 68,
-    borderRadius: 34,
-    backgroundColor: '#D1D5DB',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  innerCirclePropia: {
-    backgroundColor: '#F97316',
-  },
-  innerMedia: {
-    width: '100%',
-    height: '100%',
-  },
-  plusBadge: {
-    position: 'absolute',
-    right: -2,
-    bottom: -2,
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    backgroundColor: '#F97316',
-    borderWidth: 2,
-    borderColor: '#FFFFFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  nombre: {
-    fontSize: 12,
-    color: '#111827',
-    fontWeight: '600',
-    marginTop: 2,
-  },
-  inicialTxt: {
-    color: '#FFFFFF',
-    fontSize: 18,
-    fontWeight: '800',
-  },
-  progresoWrap: {
-    marginTop: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#111827',
-    borderColor: '#374151',
-    borderWidth: 1,
-    borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-  },
-  progresoTextWrap: {
-    marginLeft: 8,
-  },
-  progresoText: {
-    color: '#F9FAFB',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  progresoPct: {
-    color: '#F97316',
-    fontSize: 11,
-    fontWeight: '700',
-  },
+  wrapper: { width: '100%', backgroundColor: '#FFFFFF', paddingVertical: 14 },
+  lista: { paddingHorizontal: 16 },
+  item: { alignItems: 'center', width: 104, marginRight: 10 },
+  avatarWrap: { position: 'relative', width: 104, height: 104, marginBottom: 8 },
+  avatar: { width: 104, height: 104, borderRadius: 52, borderWidth: 3, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFFFFF' },
+  avatarConHistoria: { borderColor: '#E5E7EB' },
+  avatarPropiaSinHistoria: { borderColor: '#E5E7EB' },
+  avatarOtro: { borderColor: '#FF914D', marginBottom: 8 },
+  avatarVisto: { borderColor: '#D1D5DB' },
+  innerMedia: { width: 92, height: 92, borderRadius: 46 },
+  innerCircle: { width: 92, height: 92, borderRadius: 46, backgroundColor: '#D1D5DB', alignItems: 'center', justifyContent: 'center' },
+  innerCirclePropia: { backgroundColor: '#374151' },
+  plusBadge: { position: 'absolute', right: 2, bottom: 2, width: 28, height: 28, borderRadius: 14, backgroundColor: '#374151', borderWidth: 3, borderColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' },
+  nombre: { fontSize: 13, color: '#374151', fontWeight: '700', textAlign: 'center' },
+  nombreVisto: { color: '#9CA3AF' },
+  inicialTxt: { color: '#FFF', fontSize: 24, fontWeight: 'bold' },
+  progresoWrap: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: 10, backgroundColor: 'rgba(0,0,0,0.05)', padding: 10, borderRadius: 10 },
+  progresoTextWrap: { marginLeft: 8, flexDirection: 'row', alignItems: 'center' },
+  progresoText: { fontSize: 12, color: '#F97316', fontWeight: '600' },
+  progresoPct: { marginLeft: 5, fontSize: 12, color: '#F97316', fontWeight: '800' },
+  gestorOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
+  gestorCard: { backgroundColor: 'white', width: '80%', padding: 20, borderRadius: 16 },
+  gestorTitulo: { fontSize: 18, fontWeight: 'bold' },
+  optimizandoOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(255,255,255,0.8)', justifyContent: 'center', alignItems: 'center', zIndex: 9999 },
+  optimizandoTxt: { marginTop: 10, color: '#F97316', fontWeight: 'bold', fontSize: 14 }
 });

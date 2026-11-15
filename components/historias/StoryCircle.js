@@ -1,5 +1,6 @@
 import React from 'react';
 import { Image, StyleSheet, Text, View, Pressable } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 
 const StoryCircle = ({
   onPress,
@@ -9,12 +10,16 @@ const StoryCircle = ({
   isSeen = false,
   isUser = false,
   showPlus = false,
-  onPlusPress,
-  children
+  onPlusPress
 }) => {
-  const graphite = '#374151'; // Graphite Gray
-  const orange = '#F97316';   // Brand Orange
-  const lightGray = '#D1D5DB'; // Seen Gray
+  const graphite = '#4B5563';    // Gris Grafito suave
+  const softOrange = '#FF9D5C';  // Naranja más clarito y vibrante
+  const lightGray = '#E5E7EB';   // Gris clarito para historias vistas
+
+  // Tamaño imponente pero balanceado (105px)
+  const CIRCLE_SIZE = 105;
+  const BORDER_WIDTH = 3.5;
+  const INNER_SIZE = CIRCLE_SIZE - (BORDER_WIDTH * 2) - 6;
 
   return (
     <View style={styles.container}>
@@ -23,18 +28,23 @@ const StoryCircle = ({
         onLongPress={onLongPress}
         style={({ pressed }) => [
           styles.avatarWrap,
-          pressed && { opacity: 0.8 }
+          pressed && { opacity: 0.85 }
         ]}
       >
         <View
           style={[
             styles.borderCircle,
-            isUser ? styles.noBorder : (isSeen ? { borderColor: lightGray } : { borderColor: orange })
-            // Note: For the "orange mixed with graphite" we might need a more complex style or just use these two.
-            // If the user wants a literal mix, we can try to use a gradient or just a specific color.
+            { width: CIRCLE_SIZE, height: CIRCLE_SIZE, borderRadius: CIRCLE_SIZE / 2 },
+            isUser
+              ? { borderColor: 'transparent', borderWidth: 0 }
+              : (isSeen ? { borderColor: lightGray } : { borderColor: softOrange })
           ]}
         >
-          <View style={styles.innerCircle}>
+          <View style={[
+            styles.innerCircle,
+            { width: INNER_SIZE, height: INNER_SIZE, borderRadius: INNER_SIZE / 2 },
+            isUser && { borderWidth: 0 }
+          ]}>
             {image ? (
               <Image source={{ uri: image }} style={styles.image} />
             ) : (
@@ -52,7 +62,7 @@ const StoryCircle = ({
             style={[styles.plusBadge, { backgroundColor: graphite }]}
             onPress={onPlusPress}
           >
-            <Text style={styles.plusText}>+</Text>
+            <Ionicons name="add" size={20} color="#FFFFFF" />
           </Pressable>
         )}
       </Pressable>
@@ -68,31 +78,22 @@ const StoryCircle = ({
 const styles = StyleSheet.create({
   container: {
     alignItems: 'center',
-    width: 78,
+    width: 125, // Ancho para que entren ~3 y se alineen con el perfil
     marginHorizontal: 4,
   },
   avatarWrap: {
     position: 'relative',
-    padding: 3,
+    padding: 2,
   },
   borderCircle: {
-    width: 68,
-    height: 68,
-    borderRadius: 34,
-    borderWidth: 2.5,
+    borderWidth: 3.5,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  noBorder: {
-    borderWidth: 0,
-  },
   innerCircle: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    backgroundColor: '#F3F4F6',
+    backgroundColor: '#FFFFFF',
     overflow: 'hidden',
-    borderWidth: 1.5,
+    borderWidth: 2,
     borderColor: '#FFFFFF',
   },
   image: {
@@ -104,39 +105,35 @@ const styles = StyleSheet.create({
     height: '100%',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#E5E7EB',
+    backgroundColor: '#F3F4F6',
   },
   userPlaceholder: {
-    backgroundColor: '#374151',
+    backgroundColor: '#4B5563',
   },
   initials: {
     color: '#FFFFFF',
-    fontSize: 20,
+    fontSize: 28,
     fontWeight: '700',
   },
   plusBadge: {
     position: 'absolute',
     right: 4,
     bottom: 4,
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    borderWidth: 2,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 2.5,
     borderColor: '#FFFFFF',
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  plusText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: 'bold',
-    marginTop: -1,
+    elevation: 3,
   },
   name: {
-    fontSize: 11,
-    marginTop: 4,
+    fontSize: 12,
+    marginTop: 6,
     color: '#374151',
     textAlign: 'center',
+    fontWeight: '500',
   },
 });
 

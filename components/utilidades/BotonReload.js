@@ -51,9 +51,6 @@ export default function BotonReload({ label, onReload, color = '#FF6600', bgColo
     >
       <View style={styles.content}>
         <Text style={[styles.text, { color: color }]}>{label}</Text>
-        <Animated.View style={{ transform: [{ rotate: spin }] }}>
-          <Ionicons name="refresh" size={16} color={color} style={styles.icon} />
-        </Animated.View>
       </View>
     </TouchableOpacity>
   );
@@ -67,12 +64,10 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     alignItems: 'center',
     justifyContent: 'center',
-    minWidth: 120,
   },
   content: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
   },
   text: {
     fontSize: 15,
@@ -80,7 +75,4 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
-  icon: {
-    marginLeft: 2,
-  }
 });

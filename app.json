@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "merlo-conek",
+    "name": "Merlo Conektad@",
     "slug": "merlo-conek",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -8,34 +8,41 @@
     "scheme": "merloconec",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "icon": "./assets/images/icon.png"
     },
     "android": {
+      "icon": "./assets/images/icon.png",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+        "backgroundColor": "#0b1621",
+        "foregroundImage": "./assets/images/icon.png"
       },
-      "predictiveBackGestureEnabled": false,
       "package": "com.cristian1982.merloconec",
       "permissions": [
         "android.permission.CAMERA",
-        "android.permission.RECORD_AUDIO"
+        "android.permission.RECORD_AUDIO",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
+        "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
+        "android.permission.ACCESS_MEDIA_LOCATION",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.READ_MEDIA_AUDIO"
       ],
       "googleServicesFile": "./google-services.json"
     },
     "web": {
-      "bundler": "metro",
-      "output": "static",
-      "favicon": "./assets/images/favicon.png"
+      "favicon": "./assets/images/icon.png"
     },
     "plugins": [
       "expo-router",
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/splash-icon.png",
+          "image": "./assets/images/splash.png",
           "resizeMode": "contain",
           "backgroundColor": "#ffffff"
         }
@@ -44,14 +51,41 @@
         "expo-build-properties",
         {
           "android": {
-            "googleServicesFile": "./google-services.json"
+            "googleServicesFile": "./google-services.json",
+            "kotlinVersion": "2.0.21"
           }
         }
       ],
-      "expo-video"
+      "expo-video",
+      "expo-audio",
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Permitir que Merlo Conek acceda a tus fotos",
+          "savePhotosPermission": "Permitir que Merlo Conek guarde fotos en tu galería",
+          "isAccessMediaLocationEnabled": true
+        }
+      ],
+      "expo-image",
+      [
+        "react-native-google-mobile-ads",
+        {
+          "androidAppId": "ca-app-pub-3940256099942544~3347511713",
+          "iosAppId": "ca-app-pub-3940256099942544~1458002511"
+        }
+      ],
+      "expo-asset"
     ],
     "experiments": {
       "typedRoutes": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "r2WorkerUrl": "https://merloconek-upload.cristianayala10.workers.dev",
+      "eas": {
+        "projectId": "f3cb8231-467a-4b8c-a876-aec3950b3d29"
+      }
+    },
+    "owner": "cristian1982"
   }
 }

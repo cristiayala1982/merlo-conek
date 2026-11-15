@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity, Image, ActivityIndicator, Alert, Modal, Pressable, Clipboard, Platform, NativeModules } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity, Image, ActivityIndicator, Alert, Modal, Pressable, Clipboard, Platform, NativeModules, BackHandler } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import { doc, onSnapshot, query, collection, where, orderBy, limit, getDoc, serverTimestamp, addDoc, arrayUnion } from 'firebase/firestore';
+import { doc, onSnapshot, query, collection, where, orderBy, limit, getDoc, serverTimestamp, addDoc, arrayUnion, updateDoc } from 'firebase/firestore';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as VideoThumbnails from 'expo-video-thumbnails';
 import { getVideoMetaData } from 'react-native-compressor';
@@ -22,9 +22,12 @@ import {
 import GrabadorAudio from './GrabadorAudio';
 import BurbujaMensaje from './BurbujaMensaje';
 import VistaPrevia from '../camara/VistaPrevia';
+import { HaloUserIcon } from '../icons/HaloIcons';
 import { comprimirVideoPro } from '../camara/compresor3';
+import { procesarImagenCompleta } from '../camaraFotos/OptimizadorImagenes';
 import { KeyboardAvoidingView, KeyboardProvider } from 'react-native-keyboard-controller';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import * as Location from 'expo-location';
 
 const COLOR_NARANJA = '#FF6600';
 const COLOR_GRAFITO = '#1F2937';
@@ -49,8 +52,20 @@ export default function ChatDetalle({ userId, miUid }) {
     if (vaciadoInicio && vaciadoInicio !== '0') return { toMillis: () => parseInt(vaciadoInicio) };
     return null;
   });
+  const [metaCargada, setMetaCargada] = useState(false);
 
   const [mensajesOptimistas, setMensajesOptimistas] = useState([]);
+  const optimistasRef = useRef([]);
+
+  const agregarOptimista = (msg) => {
+    optimistasRef.current = [msg, ...optimistasRef.current.filter(o => o.id !== msg.id)];
+    setMensajesOptimistas([...optimistasRef.current]);
+  };
+
+  const removerOptimista = (id) => {
+    optimistasRef.current = optimistasRef.current.filter(o => o.id !== id);
+    setMensajesOptimistas([...optimistasRef.current]);
+  };
   const [productoContexto, setProductoContexto] = useState(null);
   const [mensajeSeleccionado, setMensajeSeleccionado] = useState(null);
   const [mensajeAResponder, setMensajeAResponder] = useState(null);
@@ -59,11 +74,49 @@ export default function ChatDetalle({ userId, miUid }) {
   const [estaSubiendo, setEstaSubiendo] = useState(false);
   const [progresoMsg, setProgresoMsg] = useState("");
   const [progresoPct, setProgresoPct] = useState(0);
+  const [showScrollBottom, setShowScrollBottom] = useState(false);
 
-  const chatId = tipo === 'market' ? [miUid, userId].sort().join('_') + '_market' : [miUid, userId].sort().join('_');
+  const chatId = tipo === 'market' ? [miUid, userId].sort().join('_') + '_market' : (tipo === 'soporte' ? [miUid, userId].sort().join('_') + '_soporte' : [miUid, userId].sort().join('_'));
   const loTengoBloqueado = miPerfil?.bloqueados?.includes(userId);
   const meTieneBloqueado = otroPerfil?.bloqueados?.includes(miUid);
   const bloqueoActivo = loTengoBloqueado || meTieneBloqueado;
+
+  const scrollToMessage = (id) => {
+    const index = mensajes.findIndex(m => m.id === id);
+    if (index !== -1) {
+      setHighlightId(id);
+      flatListRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0.5 });
+      setTimeout(() => setHighlightId(null), 3000);
+    }
+  };
+
+  const reproducirSiguiente = (idActual) => {
+    const indexActual = mensajes.findIndex(m => m.id === idActual);
+    if (indexActual === -1) return;
+    const siguienteMensaje = mensajes[indexActual - 1];
+    if (siguienteMensaje && siguienteMensaje.tipo === 'audio') {
+      setPlayingId(siguienteMensaje.id);
+    } else {
+      setPlayingId(null);
+    }
+  };
+
+  const formatTime = (ts) => {
+    if (!ts) return '';
+    const d = ts.toDate ? ts.toDate() : new Date(ts.seconds * 1000);
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  };
+
+  const formatSeparatorDate = (date) => {
+    const hoy = new Date();
+    const ayer = new Date();
+    ayer.setDate(hoy.getDate() - 1);
+
+    if (date.toDateString() === hoy.toDateString()) return 'Hoy';
+    if (date.toDateString() === ayer.toDateString()) return 'Ayer';
+
+    return date.toLocaleDateString([], { day: '2-digit', month: 'long', year: 'numeric' });
+  };
 
   useEffect(() => {
     obtenerPerfilUsuario(miUid, setMiPerfil);
@@ -99,86 +152,291 @@ export default function ChatDetalle({ userId, miUid }) {
         if (data[miUid]?.unreadCount > 0) {
           updateDoc(doc(db, 'chats', chatId), { [`${miUid}.unreadCount`]: 0 });
         }
+      } else {
+        setVaciadoTimestamp(null);
       }
+      setMetaCargada(true);
     });
-    return () => { toggleMiStatus(null); unsub(); };
+
+    // Limpiar historial de notificaciones nativas y marcar como chat activo
+    if (NativeModules.NotificationHistoryModule) {
+      NativeModules.NotificationHistoryModule.clearChatHistory(chatId);
+      NativeModules.NotificationHistoryModule.setActiveChat(chatId);
+    }
+
+    return () => {
+      toggleMiStatus(null);
+      unsub();
+      // Desmarcar chat activo al salir
+      if (NativeModules.NotificationHistoryModule) {
+        NativeModules.NotificationHistoryModule.setActiveChat(null);
+      }
+    };
   }, [chatId]);
 
   useEffect(() => {
+    if (!metaCargada) return;
+
     const q = query(collection(db, 'mensajes_chat'), where('chatId', '==', chatId), orderBy('createdAt', 'desc'), limit(40));
     return onSnapshot(q, (snapshot) => {
-      let msgs = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
-      marcarMensajesComoLeidos(msgs, miUid);
-      if (vaciadoTimestamp) {
-        const tV = vaciadoTimestamp.toMillis ? vaciadoTimestamp.toMillis() : (vaciadoTimestamp.seconds * 1000);
-        msgs = msgs.filter(m => !m.createdAt || (m.createdAt.toMillis ? m.createdAt.toMillis() : m.createdAt.seconds * 1000) > tV);
+      const rawMsgs = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+      marcarMensajesComoLeidos(rawMsgs, miUid);
+
+      // Limpiar de optimistasRef aquellos mensajes que ya llegaron en rawMsgs
+      const idsLlegados = rawMsgs.map(m => m.clientSideId).filter(Boolean);
+      if (idsLlegados.length > 0) {
+        optimistasRef.current = optimistasRef.current.filter(o => !idsLlegados.includes(o.id));
       }
-      setMensajes(msgs.filter(m => !(m.borradoPara && m.borradoPara.includes(miUid))));
+
+      const msgsFiltrados = rawMsgs.filter(m => {
+        if (m.borradoPara && m.borradoPara.includes(miUid)) return false;
+        if (vaciadoTimestamp) {
+          const tV = vaciadoTimestamp.toMillis ? vaciadoTimestamp.toMillis() : (vaciadoTimestamp.seconds * 1000);
+          const tM = m.createdAt ? (m.createdAt.toMillis ? m.createdAt.toMillis() : (m.createdAt.seconds ? m.createdAt.seconds * 1000 : m.createdAt)) : 0;
+          return tM > tV;
+        }
+        return true;
+      });
+
+      // Combinar con optimistas pendientes que aún no llegaron a Firestore
+      const optimistasPendientes = optimistasRef.current.filter(o => !rawMsgs.some(m => m.clientSideId === o.id));
+      const listaCombinada = [...optimistasPendientes, ...msgsFiltrados];
+
+      const processed = [];
+      for (let i = 0; i < listaCombinada.length; i++) {
+        const current = listaCombinada[i];
+        const next = listaCombinada[i + 1];
+
+        const currentDate = current.createdAt ? (current.createdAt.toDate ? current.createdAt.toDate() : new Date(current.createdAt.seconds * 1000)) : new Date();
+        const nextDate = next && next.createdAt ? (next.createdAt.toDate ? next.createdAt.toDate() : new Date(next.createdAt.seconds * 1000)) : null;
+
+        processed.push(current);
+
+        if (!nextDate || currentDate.toDateString() !== nextDate.toDateString()) {
+          processed.push({
+            id: `date-${current.id}`,
+            tipo: 'date_separator',
+            date: currentDate,
+            createdAt: current.createdAt
+          });
+        }
+      }
+
+      setMensajes(processed);
     });
-  }, [chatId, vaciadoTimestamp]);
+  }, [chatId, vaciadoTimestamp, metaCargada]);
 
   const handleEnviarMedia = async (textoSobreMedia = '', uriEditada = null) => {
     if (estaSubiendo || !archivoCapturado) return;
-    const captura = { ...archivoCapturado };
-    if (uriEditada) captura.uri = uriEditada;
-    try {
-      setArchivoCapturado(null); setEstaSubiendo(true); setProgresoMsg("Preparando archivo..."); setProgresoPct(0);
-      let uriParaSubir = captura.uri; let thumbnailUri = null; let duracionMs = null;
-      const temporales = [];
 
-      if (captura.tipo === 'video') {
-        setProgresoMsg("Generando miniatura...");
-        thumbnailUri = await VideoThumbnails.getThumbnailAsync(captura.uri, { time: 1000 }).then(r => r.uri);
-        if (thumbnailUri) temporales.push(thumbnailUri);
-        setProgresoMsg("Comprimiendo video...");
-        uriParaSubir = await comprimirVideoPro(captura.uri);
-        if (uriParaSubir !== captura.uri) temporales.push(uriParaSubir);
+    // 1. Datos iniciales y cierre inmediato de vista previa
+    const uriParaSubir = uriEditada || archivoCapturado.uri;
+    const thumbnailUri = archivoCapturado.thumbnailLocal || archivoCapturado.uriLQ || null;
+    const tipo = archivoCapturado.tipo;
+    const duracionMsPrevia = archivoCapturado.duracionMs || null;
+
+    const tempId = `temp-media-${Date.now()}`;
+    setArchivoCapturado(null); // Cierre inmediato de la pantalla de edición
+
+    try {
+      // 2. Crear mensaje optimista
+      const msgOptimista = {
+        id: tempId,
+        chatId,
+        url: uriParaSubir, // Usamos la URI local para mostrarla ya
+        thumbnailUrl: thumbnailUri,
+        duracionMs: duracionMsPrevia,
+        userId: miUid,
+        user: miPerfil?.nombre || 'Usuario',
+        userPhoto: miPerfil?.fotoUrl || null,
+        createdAt: { seconds: Date.now() / 1000 },
+        tipo: tipo,
+        texto: textoSobreMedia.trim(),
+        leido: false,
+        enviando: true, // Flag para mostrar spinner local
+        replyTo: mensajeAResponder ? {
+          id: mensajeAResponder.id,
+          text: getReplyPreviewText(mensajeAResponder),
+          user: mensajeAResponder.user,
+          previewUrl: mensajeAResponder.thumbnailUrl || mensajeAResponder.url || null
+        } : null
+      };
+
+      agregarOptimista(msgOptimista);
+      const reply = mensajeAResponder;
+      setMensajeAResponder(null);
+
+      // 3. Subida real en segundo plano
+      setEstaSubiendo(true);
+      setProgresoPct(0);
+
+      let duracionMs = duracionMsPrevia;
+      if (tipo === 'video' && !duracionMs) {
         const meta = await getVideoMetaData(uriParaSubir);
         duracionMs = meta?.duration ? Math.round(Number(meta.duration) * 1000) : null;
-      } else temporales.push(uriParaSubir);
+      }
 
       const res = await subirMediaChat({
-        uri: uriParaSubir, tipo: captura.tipo, thumbnailUri,
-        onProgress: ({ fase, progreso }) => { setProgresoPct(progreso); setProgresoMsg(fase === 'subiendo-media' ? `Subiendo archivo... ${progreso}%` : `Subiendo miniatura... ${progreso}%`); }
+        uri: uriParaSubir,
+        tipo: tipo,
+        thumbnailUri,
+        onProgress: ({ fase, progreso }) => {
+          setProgresoPct(progreso);
+          setProgresoMsg(fase === 'subiendo-media' ? `Subiendo archivo... ${progreso}%` : `Subiendo miniatura... ${progreso}%`);
+        }
       });
 
-      const reply = mensajeAResponder; setMensajeAResponder(null);
-      await addDoc(collection(db, 'mensajes_chat'), {
-        chatId, url: res.mediaUrl, thumbnailUrl: res.thumbnailUrl || null, duracionMs, userId: miUid, user: miPerfil?.nombre || 'Usuario', userPhoto: miPerfil?.fotoUrl || null, createdAt: serverTimestamp(), tipo: captura.tipo, texto: textoSobreMedia.trim(), leido: false,
-        replyTo: reply ? { id: reply.id, text: getReplyPreviewText(reply), user: reply.user, previewUrl: reply.thumbnailUrl || reply.url || null } : null
+      // 4. Enviar a Firestore real
+      const { enviarMensajeChat } = require('../../services/firebase/chatService');
+      await enviarMensajeChat({
+        chatId,
+        paraUserId: userId,
+        texto: textoSobreMedia.trim(),
+        tipo: tipo,
+        media: {
+          url: res.mediaUrl,
+          thumbnailUrl: res.thumbnailUrl || null,
+          duracionMs,
+          tipo: tipo
+        },
+        replyTo: reply ? { id: reply.id, text: getReplyPreviewText(reply), user: reply.user, previewUrl: reply.thumbnailUrl || reply.url || null } : null,
+        clientSideId: tempId, // Pulsera de identidad
+        extraData: tipo === 'market' ? { tipo: 'market', productId } : (tipo === 'soporte' ? { tipo: 'soporte' } : {}) // PASAR CONTEXTO
       });
-      await actualizarMetadataChat(chatId, userId, captura.tipo === 'video' ? '🎥 Video' : '📷 Foto', true);
-      temporales.forEach(t => FileSystem.deleteAsync(t, { idempotent: true }));
-    } catch (e) { Alert.alert("Error", "No se pudo enviar."); } finally { setEstaSubiendo(false); setProgresoMsg(""); }
+    } catch (e) {
+      console.error("Error handleEnviarMedia:", e);
+      Alert.alert("Error", "No se pudo enviar el archivo.");
+      removerOptimista(tempId);
+    } finally {
+      setEstaSubiendo(false);
+      setProgresoMsg("");
+    }
+  };
+
+  const enviarUbicacion = async () => {
+    const tempId = `temp-loc-${Date.now()}`;
+    const reply = mensajeAResponder; setMensajeAResponder(null);
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert("Permiso denegado", "Se necesita permiso de ubicación para compartirla.");
+        return;
+      }
+      setEstaSubiendo(true);
+      setProgresoMsg("Obteniendo ubicación GPS...");
+      const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      const coords = { latitude: location.coords.latitude, longitude: location.coords.longitude };
+
+      const msgOptimista = {
+        id: tempId,
+        chatId,
+        userId: miUid,
+        user: miPerfil?.nombre || 'Usuario',
+        userPhoto: miPerfil?.fotoUrl || null,
+        text: '📍 Ubicación compartida',
+        coords,
+        createdAt: { seconds: Date.now() / 1000 },
+        tipo: 'ubicacion',
+        leido: false,
+        enviando: true,
+        replyTo: reply ? { id: reply.id, text: getReplyPreviewText(reply), user: reply.user, previewUrl: reply.thumbnailUrl || reply.url || null } : null
+      };
+
+      agregarOptimista(msgOptimista);
+
+      const { enviarMensajeChat } = require('../../services/firebase/chatService');
+      await enviarMensajeChat({
+        chatId,
+        paraUserId: userId,
+        texto: '📍 Ubicación compartida',
+        tipo: 'ubicacion',
+        coords,
+        replyTo: reply ? { id: reply.id, text: getReplyPreviewText(reply), user: reply.user, previewUrl: reply.thumbnailUrl || reply.url || null } : null,
+        clientSideId: tempId,
+        extraData: tipo === 'market' ? { tipo: 'market', productId } : (tipo === 'soporte' ? { tipo: 'soporte' } : {})
+      });
+    } catch (e) {
+      console.error("Error enviando ubicación:", e);
+      Alert.alert("Error", "No se pudo obtener la ubicación actual.");
+      removerOptimista(tempId);
+    } finally {
+      setEstaSubiendo(false);
+      setProgresoMsg("");
+    }
   };
 
   const enviarMensaje = async () => {
     if (texto.trim() === '') return;
     const t = texto; const reply = mensajeAResponder; setTexto(''); setMensajeAResponder(null);
+
+    // ID temporal para el mensaje optimista
+    const tempId = `temp-text-${Date.now()}`;
+
     try {
       let finalTxt = t;
       if (t.startsWith('[CLASIFICADOS]')) finalTxt = `🟢 ${t}`;
       else if (t.startsWith('[HUELLITAS]')) finalTxt = `🐾 ${t}`;
-      await addDoc(collection(db, 'mensajes_chat'), {
-        chatId, text: finalTxt, userId: miUid, user: miPerfil?.nombre || 'Usuario', userPhoto: miPerfil?.fotoUrl || null, createdAt: serverTimestamp(), tipo: 'texto', leido: false,
-        replyTo: reply ? { id: reply.id, text: getReplyPreviewText(reply), user: reply.user, previewUrl: reply.thumbnailUrl || reply.url || null } : null
+
+      // 1. Crear mensaje optimista
+      const msgOptimista = {
+        id: tempId,
+        chatId,
+        userId: miUid,
+        user: miPerfil?.nombre || 'Usuario',
+        userPhoto: miPerfil?.fotoUrl || null,
+        text: finalTxt,
+        createdAt: { seconds: Date.now() / 1000 },
+        tipo: 'texto',
+        leido: false,
+        enviando: true, // Flag para mostrar algún indicador si quieres
+        replyTo: reply ? {
+          id: reply.id,
+          text: getReplyPreviewText(reply),
+          user: reply.user,
+          previewUrl: reply.thumbnailUrl || reply.url || null
+        } : null
+      };
+
+      agregarOptimista(msgOptimista);
+
+      const { enviarMensajeChat } = require('../../services/firebase/chatService');
+      await enviarMensajeChat({
+        chatId,
+        paraUserId: userId,
+        texto: finalTxt,
+        replyTo: reply ? { id: reply.id, text: getReplyPreviewText(reply), user: reply.user, previewUrl: reply.thumbnailUrl || reply.url || null } : null,
+        clientSideId: tempId,
+        extraData: tipo === 'market' ? { tipo: 'market', productId } : (tipo === 'soporte' ? { tipo: 'soporte' } : {}) // PASAR CONTEXTO MARKET
       });
-      await actualizarMetadataChat(chatId, userId, finalTxt, true);
-    } catch (e) { setTexto(t); setMensajeAResponder(reply); }
+    } catch (e) {
+      console.error("Error enviando mensaje:", e);
+      setTexto(t);
+      setMensajeAResponder(reply);
+      removerOptimista(tempId);
+    }
   };
 
   const handleEnviarAudio = async (uri) => {
     const tempId = `temp-${Date.now()}`;
-    setMensajesOptimistas(p => [{ id: tempId, chatId, url: uri, userId: miUid, user: miPerfil?.nombre || 'Usuario', userPhoto: miPerfil?.fotoUrl || null, createdAt: { seconds: Date.now() / 1000 }, tipo: 'audio', leido: false, enviando: true }, ...p]);
+    agregarOptimista({ id: tempId, chatId, url: uri, userId: miUid, user: miPerfil?.nombre || 'Usuario', userPhoto: miPerfil?.fotoUrl || null, createdAt: { seconds: Date.now() / 1000 }, tipo: 'audio', leido: false, enviando: true });
     try {
       const audioUrl = await subirAudioChat(uri);
       const reply = mensajeAResponder; setMensajeAResponder(null);
-      await addDoc(collection(db, 'mensajes_chat'), {
-        chatId, url: audioUrl, userId: miUid, user: miPerfil?.nombre || 'Usuario', userPhoto: miPerfil?.fotoUrl || null, createdAt: serverTimestamp(), tipo: 'audio', leido: false, clientSideId: tempId,
-        replyTo: reply ? { id: reply.id, text: '🎤 Audio', user: reply.user, previewUrl: reply.thumbnailUrl || reply.url || null } : null
+
+      const { enviarMensajeChat } = require('../../services/firebase/chatService');
+      await enviarMensajeChat({
+        chatId,
+        paraUserId: userId,
+        tipo: 'audio',
+        media: { url: audioUrl, tipo: 'audio' },
+        replyTo: reply ? { id: reply.id, text: '🎤 Audio', user: reply.user, previewUrl: reply.thumbnailUrl || reply.url || null } : null,
+        clientSideId: tempId, // Pulsera de identidad
+        extraData: tipo === 'market' ? { tipo: 'market', productId } : (tipo === 'soporte' ? { tipo: 'soporte' } : {}) // PASAR CONTEXTO MARKET
       });
-      await actualizarMetadataChat(chatId, userId, '🎤 Audio', true);
-    } finally { setMensajesOptimistas(p => p.filter(m => m.id !== tempId)); }
+    } catch (e) {
+      console.error("Error enviando audio:", e);
+      removerOptimista(tempId);
+    }
   };
 
   const getReplyPreviewText = (m) => {
@@ -198,16 +456,49 @@ export default function ChatDetalle({ userId, miUid }) {
     }
   };
 
+  const handleBack = () => {
+    // Si podemos ir atrás Y hay historial previo real, vamos atrás.
+    // Pero si venimos de una notificación, canGoBack puede ser falso o llevarnos al Home.
+    // Forzamos la vuelta a la lista de chats para que siempre pase por ahí.
+    router.replace('/chats');
+    return true;
+  };
+
+  useEffect(() => {
+    // Escuchar el botón físico de Android
+    const backHandler = BackHandler.addEventListener('hardwareBackPress', handleBack);
+    return () => backHandler.remove();
+  }, []);
+
   return (
     <KeyboardProvider>
-      <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
+      <SafeAreaView style={styles.safeArea}>
         <View style={styles.topBar}>
-          <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}><Ionicons name="arrow-back" size={30} color={COLOR_GRAFITO} /></TouchableOpacity>
+          <TouchableOpacity onPress={handleBack} style={styles.backBtn}><Ionicons name="arrow-back" size={30} color={COLOR_GRAFITO} /></TouchableOpacity>
           <TouchableOpacity style={styles.headerInfo} onPress={() => !bloqueoActivo && router.push({ pathname: '/(tabs)/perfilAjeno', params: { userId } })}>
-            <Image source={{ uri: otroPerfil?.fotoUrl || 'https://picsum.photos/200' }} style={styles.headerAvatar} />
+            {otroPerfil?.fotoUrl ? (
+              <Image source={{ uri: otroPerfil.fotoUrl }} style={styles.headerAvatar} />
+            ) : (
+              <View style={[styles.headerAvatar, { backgroundColor: '#374151', justifyContent: 'center', alignItems: 'center' }]}>
+                <HaloUserIcon size={20} color="#FFF" />
+              </View>
+            )}
             <View>
               <Text style={styles.headerTitle}>{otroPerfil?.nombre || nombreParam || 'Usuario'}</Text>
-              {!bloqueoActivo && <View style={styles.statusRow}><View style={[styles.statusDot, { backgroundColor: otroPerfil?.online ? '#34B7F1' : '#FF4444' }]} /><Text style={styles.headerStatus}>{otroPerfil?.online ? 'En línea' : 'Desconectado'}</Text></View>}
+              {!bloqueoActivo && (
+                <View style={styles.statusRow}>
+                  {otroStatus ? (
+                    <Text style={[styles.headerStatus, { color: COLOR_NARANJA, fontWeight: 'bold' }]}>
+                      {otroStatus === 'escribiendo' ? 'Escribiendo...' : 'Grabando audio...'}
+                    </Text>
+                  ) : (
+                    <>
+                      <View style={[styles.statusDot, { backgroundColor: otroPerfil?.online ? '#34B7F1' : '#FF4444' }]} />
+                      <Text style={styles.headerStatus}>{otroPerfil?.online ? 'En línea' : 'Desconectado'}</Text>
+                    </>
+                  )}
+                </View>
+              )}
             </View>
           </TouchableOpacity>
           <TouchableOpacity onPress={() => vaciarChat(chatId, miUid)} style={styles.iconBtn}><Ionicons name="trash-outline" size={24} color={COLOR_GRAFITO} /></TouchableOpacity>
@@ -222,32 +513,79 @@ export default function ChatDetalle({ userId, miUid }) {
           </View>
         )}
 
-        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'padding'}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
+        >
           <FlatList
             ref={flatListRef}
-            data={[...mensajesOptimistas.filter(o => !mensajes.some(m => m.clientSideId === o.id)), ...mensajes]}
+            data={mensajes}
             keyExtractor={item => item.id}
             inverted
             contentContainerStyle={{ paddingHorizontal: 15, paddingVertical: 10 }}
+            keyboardShouldPersistTaps="always"
             ListHeaderComponent={() => otroStatus ? <View style={styles.typingContainer}><Text style={styles.typingText}>{otroStatus === 'escribiendo' ? 'Escribiendo...' : 'Grabando audio...'}</Text></View> : null}
-            renderItem={({ item }) => (
-              <BurbujaMensaje
-                item={item}
-                esMio={item.userId === miUid}
-                hora={item.createdAt ? new Date(item.createdAt.toMillis ? item.createdAt.toMillis() : item.createdAt.seconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
-                playingId={playingId} onPlayAudio={setPlayingId} onEndedAudio={(id) => {
-                  const idx = mensajes.findIndex(m => m.id === id);
-                  if (idx > 0 && mensajes[idx-1].tipo === 'audio') setPlayingId(mensajes[idx-1].id);
-                  else setPlayingId(null);
-                }}
-                onLongPress={setMensajeSeleccionado} onSwipeReply={setMensajeAResponder} onReplyPress={(id) => {
-                  const idx = mensajes.findIndex(m => m.id === id);
-                  if (idx !== -1) { setHighlightId(id); flatListRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.5 }); setTimeout(() => setHighlightId(null), 3000); }
-                }}
-                isHighlighted={highlightId === item.id}
-              />
-            )}
+            initialNumToRender={10}
+            maxToRenderPerBatch={10}
+            windowSize={10}
+            removeClippedSubviews={Platform.OS === 'android'}
+            updateCellsBatchingPeriod={50}
+            onScroll={(e) => {
+              const offset = e.nativeEvent.contentOffset.y;
+              setShowScrollBottom(offset > 500);
+            }}
+            onScrollToIndexFailed={(info) => {
+              flatListRef.current?.scrollToOffset({ offset: info.averageItemLength * info.index, animated: true });
+              setTimeout(() => {
+                flatListRef.current?.scrollToIndex({ index: info.index, animated: true, viewPosition: 0.5 });
+              }, 100);
+            }}
+            renderItem={({ item, index }) => {
+              if (item.tipo === 'date_separator') {
+                return <View style={styles.dateSeparator}><Text style={styles.dateSeparatorText}>{formatSeparatorDate(item.date)}</Text></View>;
+              }
+
+              const prevItem = mensajes[index - 1]; // Más reciente en el tiempo
+              const nextItem = mensajes[index + 1]; // Más antiguo en el tiempo
+
+              // Evitar ocultar foto si el siguiente es un separador o si el remitente cambia
+              const sameSenderAsNext = nextItem &&
+                                     nextItem.userId === item.userId &&
+                                     nextItem.tipo !== 'date_separator';
+
+              const horaFinal = item.createdAt ? formatTime(item.createdAt) : formatTime({ seconds: Date.now()/1000 });
+
+              const esMio = item.userId === miUid;
+              const photoReal = item.userPhoto || (esMio ? miPerfil?.fotoUrl : otroPerfil?.fotoUrl) || null;
+              const itemConFoto = { ...item, userPhoto: photoReal };
+
+              return (
+                <BurbujaMensaje
+                  item={itemConFoto}
+                  esMio={esMio}
+                  hora={horaFinal}
+                  playingId={playingId}
+                  onPlayAudio={setPlayingId}
+                  onEndedAudio={reproducirSiguiente}
+                  onLongPress={setMensajeSeleccionado}
+                  onSwipeReply={setMensajeAResponder}
+                  onReplyPress={scrollToMessage}
+                  isHighlighted={highlightId === item.id}
+                  showUserPhoto={!sameSenderAsNext}
+                />
+              );
+            }}
           />
+
+          {showScrollBottom && (
+            <TouchableOpacity
+              style={styles.scrollBottomBtn}
+              onPress={() => flatListRef.current?.scrollToOffset({ offset: 0, animated: true })}
+            >
+              <Ionicons name="chevron-down" size={24} color="white" />
+            </TouchableOpacity>
+          )}
 
           {mensajeAResponder && (
             <View style={styles.replyPreview}><View style={styles.replyBar} /><View style={{ flex: 1, paddingHorizontal: 10 }}><Text style={styles.replyUser}>{mensajeAResponder.user}</Text><Text style={styles.replyText} numberOfLines={3}>{getReplyPreviewText(mensajeAResponder)}</Text></View>
@@ -261,10 +599,45 @@ export default function ChatDetalle({ userId, miUid }) {
             <View style={styles.inputWrapper}>
               <TouchableOpacity style={styles.iconBtn} onPress={async () => {
                 try {
-                  const ruta = await NativeModules.HistoriasLabNative.abrirCamaraHistorias(false);
-                  if (ruta) setArchivoCapturado({ tipo: ruta.endsWith('.mp4') ? 'video' : 'foto', uri: `file://${ruta}` });
-                } catch(e){}
+                  const ruta = await NativeModules.HistoriasLabNative.abrirCamaraHistorias(false, false);
+                  if (ruta) {
+                    const uriOriginal = `file://${ruta}`;
+                    const esVideo = ruta.endsWith('.mp4');
+
+                    setEstaSubiendo(true);
+                    setProgresoMsg("Optimizando media...");
+                    setProgresoPct(0);
+
+                    if (esVideo) {
+                      const thumb = await VideoThumbnails.getThumbnailAsync(uriOriginal, { time: 1000 }).then(r => r.uri);
+                      const uriOptimizada = await comprimirVideoPro(uriOriginal);
+                      const meta = await getVideoMetaData(uriOptimizada || uriOriginal);
+                      const duracionMs = meta?.duration ? Math.round(Number(meta.duration) * 1000) : null;
+
+                      setArchivoCapturado({
+                        tipo: 'video',
+                        uri: uriOptimizada || uriOriginal,
+                        thumbnailLocal: thumb,
+                        duracionMs
+                      });
+                    } else {
+                      const result = await procesarImagenCompleta(uriOriginal, "CHAT-CAPTURE");
+                      setArchivoCapturado({
+                        tipo: 'foto',
+                        uri: result.uriPrincipal,
+                        uriLQ: result.uriLQ
+                      });
+                    }
+                    setEstaSubiendo(false);
+                  }
+                } catch(e){
+                  console.error("Error captura chat:", e);
+                  setEstaSubiendo(false);
+                }
               }}><Ionicons name="camera" size={28} color={COLOR_NARANJA} /></TouchableOpacity>
+              <TouchableOpacity onPress={enviarUbicacion} style={{ marginLeft: 8, marginRight: 4 }}>
+                <Ionicons name="location-outline" size={26} color={COLOR_NARANJA} />
+              </TouchableOpacity>
               <View style={styles.inputBoxContainer}>
                 {(texto.includes('[CLASIFICADOS]') || texto.includes('[HUELLITAS]')) && <Ionicons name={texto.includes('CLAS') ? "newspaper" : "paw"} size={20} color={texto.includes('CLAS') ? "#059669" : "#10B981"} style={{ marginLeft: 12 }} />}
                 <TextInput ref={inputRef} style={styles.input} placeholder="Escribe algo..." value={texto} onChangeText={handleTextChange} multiline />
@@ -329,5 +702,8 @@ const styles = StyleSheet.create({
   contextTitle: { fontSize: 14, fontWeight: 'bold' },
   contextPrice: { fontSize: 13, color: COLOR_NARANJA, fontWeight: '900' },
   contextSendBtn: { backgroundColor: COLOR_NARANJA, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, marginRight: 8 },
-  contextSendText: { color: 'white', fontSize: 12, fontWeight: 'bold' }
+  contextSendText: { color: 'white', fontSize: 12, fontWeight: 'bold' },
+  dateSeparator: { alignSelf: 'center', backgroundColor: '#F3F4F6', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12, marginVertical: 15, borderWidth: 1, borderColor: '#E5E7EB' },
+  dateSeparatorText: { fontSize: 12, color: '#6B7280', fontWeight: 'bold' },
+  scrollBottomBtn: { position: 'absolute', bottom: 80, right: 20, backgroundColor: COLOR_NARANJA, width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center', elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3.84, zIndex: 100 },
 });

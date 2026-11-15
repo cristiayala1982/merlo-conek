@@ -1,54 +1,28 @@
-import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import * as ImagePicker from 'expo-image-picker';
+import { useEffect, useState } from 'react';
+import { Alert, Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import CamaraInterna from '../camara/CamaraInterna';
 
 /**
  * Componente especializado en seleccionar SOLO FOTOS para Alertas Comunitarias.
  * Asegura uniformidad visual con la sección de Huellitas.
  */
-export default function SelectorFotoComunidad({ onFotoSeleccionada, fotosActualesCount }) {
+export default function SelectorFotoComunidad({ onFotoSeleccionada, fotosActualesCount, mantenerCamaraAbierta = false, cerrarCamara = 0 }) {
 
   const maxFotos = 1; // Las alertas comunitarias suelen ser de una sola foto
+  const [camaraVisible, setCamaraVisible] = useState(false);
 
-  const handleLaunchCamera = async () => {
+  useEffect(() => {
+    if (cerrarCamara > 0) setCamaraVisible(false);
+  }, [cerrarCamara]);
+
+  const handleLaunchCamera = () => {
     if (fotosActualesCount >= maxFotos) {
       Alert.alert("Límite alcanzado", `Solo puedes subir ${maxFotos} foto por alerta.`);
       return;
     }
 
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert("Permiso denegado", "Necesitamos acceso a la cámara para tomar fotos.");
-      return;
-    }
-
-    const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      quality: 0.8,
-    });
-
-    if (!result.canceled) {
-      onFotoSeleccionada(result.assets[0].uri);
-    }
-  };
-
-  const handleLaunchGallery = async () => {
-    if (fotosActualesCount >= maxFotos) {
-      Alert.alert("Límite alcanzado", `Solo puedes subir ${maxFotos} foto por alerta.`);
-      return;
-    }
-
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      quality: 0.8,
-    });
-
-    if (!result.canceled) {
-      onFotoSeleccionada(result.assets[0].uri);
-    }
+    setCamaraVisible(true);
   };
 
   return (
@@ -56,19 +30,29 @@ export default function SelectorFotoComunidad({ onFotoSeleccionada, fotosActuale
       <View style={styles.row}>
         <TouchableOpacity style={styles.btn} onPress={handleLaunchCamera}>
           <View style={[styles.iconCircle, { backgroundColor: '#FFF5F0' }]}>
-            <Ionicons name="camera" size={28} color="#FF6600" />
+            <Ionicons name="camera" size={36} color="#FF6600" />
           </View>
-          <Text style={styles.btnTxt}>Tomar Foto</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.btn} onPress={handleLaunchGallery}>
-          <View style={[styles.iconCircle, { backgroundColor: '#FFF5F0' }]}>
-            <Ionicons name="images" size={28} color="#FF6600" />
-          </View>
-          <Text style={styles.btnTxt}>Galería</Text>
+          <Text style={styles.btnTxt}>Foto / Galería</Text>
         </TouchableOpacity>
       </View>
-      <Text style={styles.infoTxt}>Subir Fotos (Solo imágenes)</Text>
+      <Text style={styles.infoTxt}>Solo fotos / imágenes</Text>
+
+      <Modal
+        visible={camaraVisible}
+        animationType="slide"
+        transparent={false}
+        statusBarTranslucent={true}
+        onRequestClose={() => setCamaraVisible(false)}
+      >
+        <CamaraInterna
+          visible={camaraVisible}
+          onCerrar={() => setCamaraVisible(false)}
+          onFotoCapturada={(uri) => {
+            onFotoSeleccionada(uri);
+            if (!mantenerCamaraAbierta) setCamaraVisible(false);
+          }}
+        />
+      </Modal>
     </View>
   );
 }

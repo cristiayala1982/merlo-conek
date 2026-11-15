@@ -1,19 +1,27 @@
+import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
 import { onAuthStateChanged, signInWithEmailAndPassword } from 'firebase/auth';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { auth } from '../firebaseConfig';
+import { limpiarCacheProfundo, mantenimientoInteligente } from '../services/cacheService';
 
 export default function LoginScreen() {
+  const insets = useSafeAreaInsets();
   const params = useLocalSearchParams();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [checkingSession, setCheckingSession] = useState(true);
   const [mostrarToastLogout, setMostrarToastLogout] = useState(false);
   const canContinue = email.trim().length > 0 && password.length > 0 && !loading && !checkingSession;
 
   useEffect(() => {
+    // Mantenimiento inteligente al arrancar: Solo limpia si es necesario (>200MB)
+    mantenimientoInteligente(200, 150);
+
     const unsubscribe = onAuthStateChanged(auth, user => {
       if (user) {
         router.replace('/(tabs)/home');
@@ -54,7 +62,7 @@ export default function LoginScreen() {
 
   return (
     <KeyboardAvoidingView 
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       style={styles.container}
     >
       {mostrarToastLogout && (
@@ -69,7 +77,9 @@ export default function LoginScreen() {
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.logoContainer}>
-          <Text style={styles.brandName}>Merlo Conek</Text>
+          <Text style={styles.brandName}>
+            Merlo Cone<Text style={{ color: '#4B5563' }}>K</Text>tad@
+          </Text>
         </View>
 
         <Text style={styles.title}>Iniciar Sesion</Text>
@@ -86,15 +96,27 @@ export default function LoginScreen() {
           editable={!loading}
         />
 
-        <TextInput
-          style={styles.input}
-          placeholder="Contraseña"
-          placeholderTextColor="#999"
-          secureTextEntry
-          value={password}
-          onChangeText={setPassword}
-          editable={!loading}
-        />
+        <View style={styles.passwordWrapper}>
+          <TextInput
+            style={styles.passwordInput}
+            placeholder="Contraseña"
+            placeholderTextColor="#999"
+            secureTextEntry={!showPassword}
+            value={password}
+            onChangeText={setPassword}
+            editable={!loading}
+          />
+          <TouchableOpacity
+            style={styles.eyeBtn}
+            onPress={() => setShowPassword(!showPassword)}
+          >
+            <Ionicons
+              name={showPassword ? "eye-off-outline" : "eye-outline"}
+              size={22}
+              color="#6B7280"
+            />
+          </TouchableOpacity>
+        </View>
 
         <Pressable
           style={[styles.button, !canContinue && styles.buttonDisabled]}
@@ -144,9 +166,9 @@ const styles = StyleSheet.create({
     fontSize: 12,
   },
   scrollContent: {
-    flexGrow: 1,
     padding: 30,
-    justifyContent: 'center',
+    paddingTop: 100,
+    paddingBottom: 380,
   },
   logoContainer: {
     alignItems: 'center',
@@ -174,6 +196,25 @@ const styles = StyleSheet.create({
     color: '#333333',
     borderWidth: 1,
     borderColor: '#EFEFEF',
+  },
+  passwordWrapper: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F5F5F5',
+    borderRadius: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#EFEFEF',
+    paddingRight: 15,
+  },
+  passwordInput: {
+    flex: 1,
+    padding: 18,
+    fontSize: 16,
+    color: '#333333',
+  },
+  eyeBtn: {
+    padding: 4,
   },
   button: {
     marginTop: 20,

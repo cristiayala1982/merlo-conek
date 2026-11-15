@@ -1,21 +1,22 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { View, StyleSheet, Text, TouchableOpacity, Dimensions, Pressable } from 'react-native';
 import { BannerAd, BannerAdSize, TestIds } from 'react-native-google-mobile-ads';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import BarraProgresoAd from './BarraProgresoAd';
 
-const { width, height } = Dimensions.get('window');
+const { width } = Dimensions.get('window');
 
 /**
  * CardStoryAd - Componente de Anuncio a Pantalla Completa para Historias
- * Simula una historia orgánica intercalada cada 3 usuarios.
- * Permite saltar el anuncio tocando el lateral derecho o cerrar todo con la 'X'.
+ * Implementa la técnica de la Llave Dinámica (key) para reseteo absoluto.
  */
 
 const adUnitId = __DEV__ ? TestIds.BANNER : 'ca-app-pub-3940256099942544/6300978111';
 
-export default function CardStoryAd({ onSkip, onClose }) {
+export default function CardStoryAd({ onSkip, onClose, estaActiva }) {
   const insets = useSafeAreaInsets();
+  const [pausadoManual, setPausadoManual] = useState(false);
 
   return (
     <View style={styles.container}>
@@ -23,15 +24,33 @@ export default function CardStoryAd({ onSkip, onClose }) {
       {/* Fondo oscuro de seguridad */}
       <View style={StyleSheet.absoluteFill} backgroundColor="#000" />
 
-      {/* ÁREA TÁCTIL PARA SALTAR (Lado Derecho) */}
+      {/* ÁREA TÁCTIL PARA SALTAR Y PAUSAR */}
       <Pressable
-        style={styles.skipTouchArea}
-        onPress={onSkip}
+        style={styles.mainTouchArea}
+        onPress={(evt) => {
+          const touchX = evt.nativeEvent.locationX;
+          if (touchX > width / 3) {
+            onSkip();
+          }
+        }}
+        onLongPress={() => setPausadoManual(true)}
+        onPressOut={() => setPausadoManual(false)}
         activeOpacity={1}
       />
 
+      {/* BARRA DE PROGRESO CON LLAVE DINÁMICA (Garantiza reinicio absoluto) */}
+      <View style={[styles.progressWrapper, { paddingTop: Math.max(insets.top + 5, 45) }]}>
+        <BarraProgresoAd
+          key={estaActiva ? 'activa' : 'inactiva'} // La clave del éxito: obliga a React a recrear el componente
+          activa={estaActiva}
+          pausada={pausadoManual}
+          duracion={5000}
+          alFinalizar={onSkip}
+        />
+      </View>
+
       {/* Encabezado Superior (Estilo Merlo Conek) */}
-      <View style={[styles.header, { paddingTop: Math.max(insets.top + 10, 50) }]}>
+      <View style={[styles.header, { paddingTop: 10 }]}>
         <View style={styles.headerContent}>
           <View style={styles.badgeAnuncio}>
             <Text style={styles.badgeText}>Anuncio</Text>
@@ -48,7 +67,7 @@ export default function CardStoryAd({ onSkip, onClose }) {
         <View style={styles.adWrapper}>
           <BannerAd
             unitId={adUnitId}
-            size={BannerAdSize.MEDIUM_RECTANGLE} // 300x250: el formato más rentable y estable para móvil
+            size={BannerAdSize.MEDIUM_RECTANGLE}
             requestOptions={{ requestNonPersonalizedAdsOnly: true }}
             onAdFailedToLoad={(error) => console.log('Error Google Ad en Historias:', error)}
           />
@@ -74,13 +93,17 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#000',
   },
-  skipTouchArea: {
+  mainTouchArea: {
     position: 'absolute',
     top: 0,
+    left: 0,
     right: 0,
     bottom: 0,
-    width: width * 0.7, // 70% derecho para saltar
     zIndex: 50,
+  },
+  progressWrapper: {
+    width: '100%',
+    zIndex: 110,
   },
   header: {
     flexDirection: 'row',

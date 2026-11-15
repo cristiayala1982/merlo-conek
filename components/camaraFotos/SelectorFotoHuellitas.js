@@ -1,56 +1,28 @@
-import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import * as ImagePicker from 'expo-image-picker';
+import { useEffect, useState } from 'react';
+import { Alert, Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import CamaraInterna from '../camara/CamaraInterna';
 
 /**
  * Componente especializado en seleccionar SOLO FOTOS con recorte cuadrado.
  * No permite videos y asegura uniformidad visual.
  */
-export default function SelectorFotoHuellitas({ onFotoSeleccionada, fotosActualesCount }) {
+export default function SelectorFotoHuellitas({ onFotoSeleccionada, fotosActualesCount, cerrarCamara }) {
 
   const maxFotos = 4;
+  const [camaraVisible, setCamaraVisible] = useState(false);
 
-  const handleLaunchCamera = async () => {
+  useEffect(() => {
+    if (cerrarCamara > 0) setCamaraVisible(false);
+  }, [cerrarCamara]);
+
+  const handleLaunchCamera = () => {
     if (fotosActualesCount >= maxFotos) {
       Alert.alert("Límite alcanzado", `Puedes subir un máximo de ${maxFotos} fotos.`);
       return;
     }
 
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert("Permiso denegado", "Necesitamos acceso a la cámara para tomar fotos.");
-      return;
-    }
-
-    const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images, // CANDADO: Solo imágenes
-      allowsEditing: true, // Habilitar recorte
-      aspect: [1, 1], // FORZAR CUADRADO
-      quality: 0.8,
-    });
-
-    if (!result.canceled) {
-      onFotoSeleccionada(result.assets[0].uri);
-    }
-  };
-
-  const handleLaunchGallery = async () => {
-    if (fotosActualesCount >= maxFotos) {
-      Alert.alert("Límite alcanzado", `Puedes subir un máximo de ${maxFotos} fotos.`);
-      return;
-    }
-
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images, // CANDADO: Solo imágenes
-      allowsEditing: true, // Habilitar recorte
-      aspect: [1, 1], // FORZAR CUADRADO
-      quality: 0.8,
-    });
-
-    if (!result.canceled) {
-      onFotoSeleccionada(result.assets[0].uri);
-    }
+    setCamaraVisible(true);
   };
 
   return (
@@ -58,19 +30,26 @@ export default function SelectorFotoHuellitas({ onFotoSeleccionada, fotosActuale
       <View style={styles.row}>
         <TouchableOpacity style={styles.btn} onPress={handleLaunchCamera}>
           <View style={[styles.iconCircle, { backgroundColor: '#F0FDF4' }]}>
-            <Ionicons name="camera" size={28} color="#10B981" />
+            <Ionicons name="camera" size={36} color="#10B981" />
           </View>
-          <Text style={styles.btnTxt}>Tomar Foto</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.btn} onPress={handleLaunchGallery}>
-          <View style={[styles.iconCircle, { backgroundColor: '#F0FDF4' }]}>
-            <Ionicons name="images" size={28} color="#10B981" />
-          </View>
-          <Text style={styles.btnTxt}>Galería</Text>
+          <Text style={styles.btnTxt}>Foto / Galería</Text>
         </TouchableOpacity>
       </View>
       <Text style={styles.infoTxt}>Solo se permiten fotos. Máximo 4 por aviso.</Text>
+
+      <Modal
+        visible={camaraVisible}
+        animationType="slide"
+        transparent={false}
+        statusBarTranslucent={true}
+        onRequestClose={() => setCamaraVisible(false)}
+      >
+        <CamaraInterna
+          visible={camaraVisible}
+          onCerrar={() => setCamaraVisible(false)}
+          onFotoCapturada={onFotoSeleccionada}
+        />
+      </Modal>
     </View>
   );
 }
@@ -111,10 +90,11 @@ const styles = StyleSheet.create({
     color: '#374151'
   },
   infoTxt: {
-    fontSize: 11,
-    color: '#9CA3AF',
+    fontSize: 13,
+    color: '#6B7280',
     textAlign: 'center',
+    fontWeight: '700',
     fontStyle: 'italic',
-    marginTop: 5
+    marginTop: 8
   }
 });

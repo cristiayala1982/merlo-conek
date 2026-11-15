@@ -1,17 +1,59 @@
-import { Slot } from 'expo-router';
-import { StyleSheet, View } from 'react-native';
+import { Tabs } from 'expo-router';
+import { StyleSheet, View, DeviceEventEmitter } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useState, useEffect } from 'react';
 import { Navbar } from '../../components/barraNavegacion/Navbar';
+import AmigosModal from '../../components/amigos/AmigosModal';
+
 export default function RootLayout() {
   const insets = useSafeAreaInsets();
+  const [mostrarAmigos, setMostrarAmigos] = useState(false);
+
+  useEffect(() => {
+    // LIMPIEZA DE EMERGENCIA: Borramos cualquier rastro previo de este evento
+    // para evitar que se acumulen "fantasmas" al navegar fuera y dentro.
+    DeviceEventEmitter.removeAllListeners('OPEN_AMIGOS_DESAFIO');
+
+    const subOpenAmigos = DeviceEventEmitter.addListener('OPEN_AMIGOS_DESAFIO', (esDesafio = true) => {
+      setMostrarAmigos(true);
+      // Pequeño delay para asegurar que el modal se monte antes de recibir el evento
+      setTimeout(() => {
+        DeviceEventEmitter.emit('SET_MODO_DESAFIO', esDesafio);
+      }, 100);
+    });
+
+    return () => {
+      subOpenAmigos.remove();
+    };
+  }, []);
 
   return (
-    <View style={styles.layoutContainer}>
+    <View style={[
+      styles.layoutContainer,
+      {
+        paddingTop: insets.top,
+        paddingBottom: insets.bottom
+      }
+    ]}>
       <Navbar />
       <View style={styles.contentContainer}>
-        <Slot />
+        <Tabs
+          screenOptions={{
+            headerShown: false,
+            tabBarStyle: { display: 'none' },
+            lazy: false // Cargar todas las pestañas para que el cambio sea instantáneo
+          }}
+        >
+          <Tabs.Screen name="home/index" />
+          <Tabs.Screen name="notificaciones/index" />
+          <Tabs.Screen name="perfil/index" />
+          <Tabs.Screen name="perfilAjeno/index" />
+          <Tabs.Screen name="historias/index" />
+        </Tabs>
       </View>
-      <View style={[styles.bottomSystemBar, { height: Math.max(0, insets.bottom) }]} />
+
+      {/* MODAL UNIFICADO EN EL LAYOUT RAÍZ (Anti-duplicación) */}
+      <AmigosModal visible={mostrarAmigos} onClose={() => setMostrarAmigos(false)} />
     </View>
   );
 }
@@ -19,15 +61,10 @@ export default function RootLayout() {
 const styles = StyleSheet.create({
   layoutContainer: { 
     flex: 1, 
-    backgroundColor: '#000000',
-    paddingTop: 40 // Gestión del área del notch/barra de estado
-  },
-  contentContainer: {
-    flex: 1, // Asegura que el contenido ocupe el resto de la pantalla
     backgroundColor: '#FFFFFF',
   },
-  bottomSystemBar: {
-    width: '100%',
-    backgroundColor: '#000000',
+  contentContainer: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
   },
 });

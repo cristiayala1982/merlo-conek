@@ -40,7 +40,7 @@ export default function ClasificadosPromocionar() {
   const handleSubirComprobante = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
-      allowsEditing: true,
+      allowsEditing: false, // Estabilidad
       quality: 0.7,
     });
     if (!result.canceled) setComprobanteUri(result.assets[0].uri);

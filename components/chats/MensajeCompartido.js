@@ -2,11 +2,12 @@ import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import ReaccionesMensaje from './ReaccionesMensaje';
 
 /**
  * Burbuja de mensaje para contenido compartido (Perfil, Post, etc) estilo Instagram.
  */
-export default function MensajeCompartido({ data, esMio, hora }) {
+export default function MensajeCompartido({ data, esMio, hora, onLongPress, reacciones }) {
   const router = useRouter();
 
   const handleVerContenido = () => {
@@ -16,42 +17,64 @@ export default function MensajeCompartido({ data, esMio, hora }) {
       router.push({ pathname: '/(tabs)/perfilAjeno', params: { userId: data.id } });
     } else if (data.tipo === 'post') {
       router.push({ pathname: '/postDetalle', params: { postId: data.id } });
+    } else if (data.tipo === 'alerta') {
+      router.push({ pathname: '/alertaDetalle', params: { postId: data.id } });
+    } else if (data.tipo === 'clasificado') {
+      router.push({ pathname: '/alertas/clasificados/detalle', params: { postId: data.id } });
     } else if (data.tipo === 'market') {
       router.push({ pathname: '/(marketplace)/marketDetalle', params: { productId: data.id } });
+    } else if (data.tipo === 'huellita') {
+      router.push({ pathname: '/huellitas/detalle', params: { petId: data.id } });
     }
   };
 
   return (
-    <View style={[styles.container, esMio ? styles.mio : styles.ajeno]}>
+    <TouchableOpacity
+      activeOpacity={0.9}
+      onLongPress={onLongPress}
+      style={[
+        styles.container,
+        esMio ? styles.mio : styles.ajeno,
+        { marginBottom: reacciones && Object.keys(reacciones).length > 0 ? 22 : 4 }
+      ]}
+    >
       {/* HEADER DE LA TARJETA */}
       <View style={styles.header}>
         <Ionicons
-            name={data.tipo === 'perfil' ? "person-circle-outline" : "share-social-outline"}
+            name={data.tipo === 'perfil' ? "person-circle-outline" : data.tipo === 'alerta' ? "megaphone-outline" : data.tipo === 'clasificado' ? "newspaper-outline" : data.tipo === 'huellita' ? "paw-outline" : "share-social-outline"}
             size={16}
             color="#6B7280"
         />
         <Text style={styles.headerText}>
-            {data.tipo === 'perfil' ? 'Perfil compartido' : 'Contenido compartido'}
+            {data.tipo === 'perfil' ? 'Perfil compartido' : data.tipo === 'alerta' ? 'Aviso comunitario' : data.tipo === 'clasificado' ? 'Clasificado compartido' : data.tipo === 'huellita' ? 'Mascota compartida' : 'Publicación compartida'}
         </Text>
       </View>
 
       {/* CUERPO: IMAGEN Y TÍTULO */}
-      <TouchableOpacity
+      <View
         style={styles.card}
-        activeOpacity={0.9}
-        onPress={handleVerContenido}
       >
-        <Image
-          source={{ uri: data.imagen || 'https://picsum.photos/200' }}
-          style={styles.image}
-        />
+        {data.imagen ? (
+          <Image
+            source={{ uri: data.imagen }}
+            style={styles.image}
+          />
+        ) : (
+          <View style={[styles.image, styles.noImage]}>
+             <Ionicons
+              name={data.tipo === 'perfil' ? "person" : data.tipo === 'alerta' ? "megaphone" : data.tipo === 'clasificado' ? "newspaper" : data.tipo === 'huellita' ? "paw" : "document-text"}
+              size={50}
+              color="#D1D5DB"
+            />
+          </View>
+        )}
         <View style={styles.info}>
-          <Text style={styles.titulo} numberOfLines={1}>{data.titulo || 'Contenido'}</Text>
+          <Text style={styles.titulo} numberOfLines={2}>{data.titulo || 'Contenido'}</Text>
           {data.subTitulo ? (
               <Text style={styles.subTitulo} numberOfLines={1}>{data.subTitulo}</Text>
           ) : null}
         </View>
-      </TouchableOpacity>
+      </View>
 
       {/* ACCIÓN PRINCIPAL */}
       <TouchableOpacity
@@ -64,7 +87,9 @@ export default function MensajeCompartido({ data, esMio, hora }) {
       </TouchableOpacity>
 
       <Text style={styles.hora}>{hora}</Text>
-    </View>
+
+      <ReaccionesMensaje reacciones={reacciones} />
+    </TouchableOpacity>
   );
 }
 
@@ -74,8 +99,9 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     padding: 2,
     borderWidth: 1,
-    overflow: 'hidden',
-    marginBottom: 4
+    marginBottom: 4,
+    position: 'relative',
+    // Quitamos overflow: hidden para que las reacciones floten afuera
   },
   mio: {
     alignSelf: 'flex-end',
@@ -94,7 +120,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 12,
     paddingVertical: 8,
-    gap: 6
+    gap: 6,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20
   },
   headerText: {
     fontSize: 12,
@@ -112,6 +140,11 @@ const styles = StyleSheet.create({
     width: '100%',
     height: 180,
     backgroundColor: '#EEE'
+  },
+  noImage: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#F3F4F6'
   },
   info: {
     padding: 10,
@@ -131,7 +164,9 @@ const styles = StyleSheet.create({
   btnVer: {
     paddingVertical: 10,
     alignItems: 'center',
-    backgroundColor: 'white'
+    backgroundColor: 'white',
+    borderBottomLeftRadius: 18,
+    borderBottomRightRadius: 18
   },
   btnVerText: {
     fontSize: 14,
